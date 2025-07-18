@@ -1,135 +1,128 @@
+#  Examlytic – AI-Powered Online Exam Proctoring System
 
-# 🎓 Examlytics 
-
-> Real-time webcam & screen monitoring for secure, fair exam.
-> Exams start → both webcam + screen recording begin automatically → uploaded to Supabase for admin review.
+Examlytic is a full-stack web application that enables online exams with real-time AI proctoring, video monitoring, screen recording, and admin dashboards for reviewing violations.
 
 ---
 
-## 🧠 Overview
+##  System Architecture
+![System Design](./systemdesign.png)
+### Architecture Overview
 
-**Examlytics** is a full-stack web application built for modern remote proctoring needs. It features:
-
-- 🎥 Live webcam streaming for real-time monitoring  
-- 🔒 Automatic screen recording upon exam start  
-- 🚨 AI-based cheat detection & violation logging  
-- 🌐 Supabase for authentication, storage, and database  
-- 👨‍💻 Admin dashboard to view live sessions and past screen recordings
-
----
-
-## ✨ Key Features
-
-- 🕹 **Automatic Screen Recording**: Starts with the exam  
-- ⬆️ **Auto-upload to Supabase** upon exam submission or timeout  
-- 🖼 **Playback for Admins**: View past student exam recordings easily  
-- 🧠 **AI Cheat Detection** via MidPipe API  
-- 📊 **Admin Dashboard**: Tracks live and past violations, exam sessions
+- **Frontend**: React + Lottie + CSS
+- **Backend**: Node.js + Express
+- **Authentication**: Supabase Auth (Google OAuth)
+- **Database**: Supabase PostgreSQL with Row Level Security (RLS)
+- **Real-Time**: PeerJS + Socket.IO
+- **Screen Recording**: MediaRecorder API
+- **Storage**: Supabase Storage (for screen recordings)
+- **Cheat Detection**: MidPipe API (AI flags & violation logs)
 
 ---
 
-## 🧱 Tech Stack
+###  Component Breakdown
 
-| Component        | Technology             |
-|------------------|------------------------|
-| Frontend         | React + Vite           |
-| Real-Time Media  | PeerJS (Live video)    |
-| Recording        | Browser Screen Rec APIs|
-| Backend / Auth   | Supabase               |
-| AI Detection     | MidPipe API            |
-| Hosting          | Node.js, Vercel/Netlify|
+####  Student Side
+- **Login** (via Google Auth)
+- **ExamIntro**: Animated intro page (Lottie)
+- **ExamAttempt**
+  - Webcam stream (PeerJS)
+  - Screen recording (MediaRecorder API)
+  - Live timer + question rendering from Supabase
+  - Submit functionality
+
+####  Admin Side
+- **Dashboard**:
+  - See all current exam sessions
+  - View live webcam stream
+  - Access uploaded screen recording after exam ends
+  - See AI violation report via MidPipe
 
 ---
 
-## 🚀 Installation
+###  Data Flow
 
-### 1. Clone the Repository
+1. User logs in via Supabase Auth
+2. Exam info and questions are fetched securely (RLS ensures isolation)
+3. During exam:
+   - Webcam is streamed in real-time (WebRTC via PeerJS)
+   - Screen is recorded and stored locally
+   - Recording uploaded to Supabase Storage on submit
+   - Video + screen are analyzed via MidPipe API for suspicious activity
+4. Admin dashboard fetches:
+   - Real-time stream
+   - Past recording
+   - AI-generated cheat flags
+
+---
+
+##  Security Measures
+
+- ✅ Row Level Security to isolate exam & user data
+- ✅ Supabase Auth with Google OAuth
+- ✅ Peer-to-peer encrypted webcam stream
+- ✅ Secure upload via signed URLs
+- ✅ AI-assisted cheat detection instead of manual monitoring
+
+---
+
+##  Deployment & Scalability
+
+| Layer      | Current Setup       | Scalable To                 |
+|------------|---------------------|-----------------------------|
+| Frontend   | Vite + React (Local)| Vercel / Netlify           |
+| Backend    | Express (Local)     | Render / Railway / Fly.io  |
+| DB         | Supabase PostgreSQL | Supabase (Auto-scalable)   |
+| Streaming  | PeerJS              | WebRTC SFU (e.g. LiveKit)  |
+| AI         | MidPipe API         | Custom ML pipeline (future)|
+
+---
+
+##  Future Enhancements
+
+- [ ] Implement auto face detection alerts
+- [ ] Switch from PeerJS to a more scalable SFU
+- [ ] Add graph-based cheat analytics
+- [ ] Offline exam saving & upload
+- [ ] Multi-admin review dashboard
+
+---
+
+##  Testing Strategy
+
+- ✅ Unit Testing: Key backend routes
+- ✅ Manual Testing: All proctoring flows
+- 🚧 E2E Testing: To be added with Cypress
+
+---
+
+##  Dev Stack
+
+- **React**
+- **Node.js**
+- **Supabase**
+- **Socket.IO**
+- **PeerJS**
+- **Vite**
+- **Lottie**
+- **MediaRecorder API**
+
+---
+
+##  Folder Structure
+
 ```bash
-git clone https://github.com/Shlokmonster/Examlytics.git
-cd Examlytics
-```
-
-### 2. Install Dependencies
-```bash
-npm install
-```
-
-### 3. Environment Setup
-Create `.env` file in root:
-```env
-VITE_SUPABASE_URL=your_supabase_url
-VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
-```
-
-### 4. Run Locally
-```bash
-npm run dev
-```
-
-### 5. Production Build
-```bash
-npm run build
-npm run preview
-```
-
----
-
-## ⚙️ Usage Flow
-
-1. Student logs in and starts the exam  
-2. **Auto-triggers**:
-   - Screen recording begins
-   - Webcam live feed streams to admin  
-3. On submission or timeout:
-   - Screen recording uploads automatically to Supabase Storage  
-   - Metadata saved in Supabase Database  
-   - Admin can access recordings via dashboard
-
----
-
-## 📁 Project Structure
+.
+├── public/
+├── src/
+│   ├── Components/
+│   ├── Pages/
+│   ├── utils/
+│   └── styles/
+├── vite.config.js
+├── package.json
 
 ```
-src/
-├── Pages/
-│   ├── ExamIntro.jsx
-│   ├── ExamAttempt.jsx
-│   ├── ExamDone.jsx
-│   └── AdminDashboard.jsx
-├── Components/
-│   ├── LiveMonitoring.jsx
-│   ├── ScreenRecorder.jsx
-│   └── TestComponent.jsx
-├── App.jsx
-├── index.html
-└── vite.config.js
-```
 
----
+🤝 Contributing
+If you're interested in contributing or reviewing architecture, feel free to open an issue or submit a pull request!
 
-## 🧑‍💻 Admin Dashboard Capabilities
-
-- View real-time live student exam streams  
-- Playback functionality for previous exam recordings  
-- Violation log with timestamps and behavior tags  
-- Filtering of exam sessions by student, date, or flag type
-
----
-
-## 🌱 Roadmap
-
-- Add face identification to match student ID  
-- Expand violation scoring & AI severity metrics  
-- Multi-admin role support  
-- Playback timeline scrubbing and jump-to-event  
-- Email/sms alerts for serious violations
-
----
-
-## 🧠 Built By
-
-**Shlok Kadam**  
-B.Tech CSE @ ITM Skills University  
-Full-stack dev | AI explorer | SaaS builder
-
----
