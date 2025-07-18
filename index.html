@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="referrer" content="no-referrer">
+    <title>Examlytic - Online Exam Platform</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <!-- Polyfills -->
+    <script>
+      // Fix for global object
+      window.global = window;
+      
+      // Fix for process
+      if (typeof process === 'undefined') {
+        window.process = { 
+          env: { 
+            NODE_ENV: 'development',
+            NODE_DEBUG: false
+          }, 
+          browser: true,
+          version: '16.0.0',
+          platform: 'browser',
+          cwd: () => '/',
+          nextTick: (fn, ...args) => Promise.resolve().then(() => fn(...args)),
+        };
+      } else if (!process.env) {
+        process.env = {};
+      }
+      
+      // Fix for Buffer
+      if (typeof Buffer === 'undefined') {
+        window.Buffer = { isBuffer: () => false };
+      }
+      
+      // Create a simple require shim
+      if (typeof window.require === 'undefined') {
+        window.require = function(name) {
+          if (name.startsWith('@tensorflow/')) {
+            return window[name] || {};
+          }
+          return {};
+        };
+      }
+    </script>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

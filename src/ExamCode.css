@@ -1,0 +1,164 @@
+/* General wrapper */
+.examcode-page {
+    background-color: white;
+    min-height: 110vh;
+    display: flex;
+    flex-direction: column;
+  }
+  
+  /* Flex layout for card */
+  .examcode-wrapper {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+   padding: 20PX;
+   align-items: center;
+   justify-content: center;
+
+  }
+  
+  /* Main card layout */
+  .examcode-card {
+    background-color: #fff;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    padding: 250px;
+    border-radius: 12px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+    max-width: 800px;
+    width: 100%;
+  }
+  
+  @media (min-width: 768px) {
+    .examcode-card {
+      flex-direction: row;
+      gap: 40px;
+    }
+  }
+  
+  /* Left side Lottie */
+  .examcode-lottie {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 100%;
+  }
+  
+  /* Right side form */
+  .examcode-form-section {
+    flex: 1;
+  }
+  
+  /* Title & intro */
+  .examcode-title {
+    font-size: 28px;
+    font-weight: bold;
+    color: #407ABF;
+    margin-bottom: 10px;
+  }
+  
+  .examcode-instruction {
+    font-size: 14px;
+    color: #555;
+    margin-bottom: 8px;
+  }
+  
+  .examcode-list {
+    padding-left: 18px;
+    margin-bottom: 16px;
+    font-size: 14px;
+    color: #444;
+  }
+  
+  .examcode-list li {
+    margin-bottom: 6px;
+  }
+  
+  /* Form styling */
+  form label {
+    display: block;
+    font-size: 14px;
+    color: #333;
+    margin-bottom: 6px;
+  }
+  
+  form input[type='text'] {
+    width: 100%;
+    padding: 10px 14px;
+    font-size: 15px;
+    border: 1.5px solid #ccc;
+    border-radius: 8px;
+    outline: none;
+    transition: border 0.2s ease;
+    margin-bottom: 6px;
+  }
+  
+  form input[type='text']:focus {
+    border-color: #407ABF;
+  }
+  
+  .error-input {
+    border-color: red;
+  }
+  
+  .error-text {
+    font-size: 13px;
+    color: red;
+    margin-bottom: 8px;
+  }
+  
+  /* Submit button */
+  .submit-btn {
+    width: 100%;
+    background-color: #407ABF;
+    color: white;
+    padding: 10px 16px;
+    font-size: 15px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background-color 0.25s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  
+  .submit-btn:hover {
+    background-color: #326aa4;
+  }
+  
+  .submit-btn:disabled {
+    background-color: #a3c0e4;
+    cursor: not-allowed;
+  }
+  
+  /* Lottie + spinner combo */
+  .loading-box {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  
+  .loading-text {
+    margin-left: 8px;
+    font-size: 14px;
+    color: white;
+  }
+  
+  /* Animation */
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  
+  .fade-in {
+    animation: fadeIn 0.4s ease-in-out;
+  }
+  
