@@ -1,4 +1,4 @@
-#  Examlytic – AI-Powered Online Exam Proctoring System
+#  Examlytic – AI-Powered Online Exam Proctoring System.
 
 Examlytic is a full-stack web application that enables online exams with real-time AI proctoring, video monitoring, screen recording, and admin dashboards for reviewing violations.
 
