@@ -190,7 +190,6 @@ const StudentRecordings = ({ examId, studentId, onError }) => {
                   </span>
                   {recording.score !== undefined && (
                     <span className="recording-score">
-                      Score: {recording.score}%
                     </span>
                   )}
                 </div>

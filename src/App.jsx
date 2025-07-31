@@ -15,6 +15,7 @@ import Examdone from "./Pages/Examdone"
 import ExamRedirect from "./Pages/ExamRedirect";
 import Examcode from "./Pages/Examcode";
 import LiveMonitoring from "./Components/LiveMonitoring";
+import Diagnostics from "./Pages/Diagnostics";
 
 function App() {
   console.log('App component rendering...');
@@ -184,6 +185,7 @@ function App() {
       {role === "student" && (
         <>
           <Route path="/examcode" element={<Examcode />} />
+          <Route path="/diagnostics/:examCode" element={<Diagnostics />} />
           <Route path="/exam" element={<StudentExamPage />} />
           <Route path="/exam/:examId/done" element={<Examdone />} />
           <Route path="/" element={<Navigate to="/examcode" replace />} />

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import Peer from 'peerjs';
-import { FaVolumeUp, FaVolumeMute, FaExpand, FaCompress, FaUser } from 'react-icons/fa';
+import { FaVolumeUp, FaVolumeMute, FaExpand, FaCompress, FaUser, FaExclamationTriangle, FaInfoCircle, FaDesktop } from 'react-icons/fa';
+import supabase from '../SupabaseClient';
 
 const LiveMonitoring = () => {
   const [students, setStudents] = useState([]);
@@ -9,6 +10,10 @@ const LiveMonitoring = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [recordedStreams, setRecordedStreams] = useState({});
+  const [logs, setLogs] = useState([]);
+  const [isLogsOpen, setIsLogsOpen] = useState(false);
+  const [isLoadingLogs, setIsLoadingLogs] = useState(false);
+  const [selectedStudent, setSelectedStudent] = useState(null);
   const mediaRecorders = useRef({});
   
   const peerRef = useRef(null);
@@ -103,6 +108,39 @@ const LiveMonitoring = () => {
       return [];
     }
   }, []);
+
+  // Fetch all logs from the last 3 minutes
+  const fetchExamLogs = useCallback(async () => {
+    try {
+      setIsLoadingLogs(true);
+      
+      // Calculate timestamp for 3 minutes ago
+      const threeMinutesAgo = new Date();
+      threeMinutesAgo.setMinutes(threeMinutesAgo.getMinutes() - 3);
+      
+      // Get all logs from the last 3 minutes
+      const { data, error } = await supabase
+        .from('exam_logs')
+        .select('*')
+        .gte('created_at', threeMinutesAgo.toISOString());
+      
+      if (error) throw error;
+      
+      setLogs(data || []);
+    } catch (err) {
+      console.error('Error fetching logs:', err);
+      setError('Failed to load recent activity logs.');
+    } finally {
+      setIsLoadingLogs(false);
+    }
+  }, []);
+
+  // Handle student selection for logs
+  const handleStudentSelect = (studentId) => {
+    setSelectedStudent(studentId);
+    fetchExamLogs(studentId);
+    setIsLogsOpen(true);
+  };
 
   // Cleanup function
   const cleanup = useCallback(() => {
@@ -507,9 +545,58 @@ const LiveMonitoring = () => {
     </div>
   );
 
+  // Format log messages with detailed information
+  const formatLogMessage = (log) => {
+    const timestamp = new Date(log.created_at).toLocaleTimeString();
+    const details = log.event_details || {};
+    
+    switch(log.event_type) {
+      case 'tab_change':
+        return `🔄 Tab changed to: ${details.url || 'Unknown URL'}`;
+      case 'window_blur':
+        return '⚠️ Window lost focus';
+      case 'window_focus':
+        return '✅ Window regained focus';
+      case 'copy':
+        return '📋 Content was copied';
+      case 'paste':
+        return '📋 Content was pasted';
+      case 'print':
+        return '🖨️ Print attempt detected';
+      case 'devtools':
+        return '🔧 Developer tools were opened';
+      case 'inactivity':
+        return '⏱️ User inactive for too long';
+      case 'multiple_faces':
+        return '👥 Multiple faces detected';
+      case 'face_not_visible':
+        return '👤 Face not visible';
+      case 'tab_switch':
+        return '🔄 Browser tab switched';
+      case 'fullscreen_exit':
+        return '🖥️ Fullscreen mode exited';
+      case 'keyboard_shortcut':
+        return '⌨️ Suspicious keyboard shortcut used';
+      case 'exam_submission':
+        return '📝 Exam submitted';
+      case 'page_visibility':
+        return `👁️ Page visibility changed: ${details.isVisible ? 'Visible' : 'Hidden'}`;
+      default:
+        return `ℹ️ ${log.event_type || 'Activity detected'}: ${JSON.stringify(details)}`;
+    }
+  };
+
   return (
     <div className="live-monitoring">
-      <h2>Live Exam Monitoring</h2>
+      <div className="monitoring-header">
+        <h2>Live Exam Monitoring</h2>
+        <button 
+          className="logs-toggle"
+          onClick={() => setIsLogsOpen(!isLogsOpen)}
+        >
+          {isLogsOpen ? 'Hide Logs' : 'Show Activity Logs'}
+        </button>
+      </div>
       
       {error && (
         <div className="error-message">
@@ -518,31 +605,284 @@ const LiveMonitoring = () => {
         </div>
       )}
       
-      {isLoading ? (
-        <div className="loading">
-          <div className="spinner"></div>
-          <p>Connecting to monitoring service...</p>
-        </div>
-      ) : (
-        <div className="students-grid">
-          {students.length > 0 ? (
-            students.map(renderStudentVideo)
+      <div className="monitoring-container">
+        <div className={`students-section ${isLogsOpen ? 'with-logs' : ''}`}>
+          {isLoading ? (
+            <div className="loading">
+              <div className="spinner"></div>
+              <p>Connecting to monitoring service...</p>
+            </div>
           ) : (
-            <div className="no-students">
-              <FaUser size={48} />
-              <p>No students connected yet</p>
-              <p>Waiting for students to join...</p>
+            <div className="students-grid">
+              {students.length > 0 ? (
+                students.map(student => (
+                  <div key={student.id}>
+                    {renderStudentVideo(student)}
+                    <button 
+                      className="view-logs-btn"
+                      onClick={() => handleStudentSelect(student.id)}
+                    >
+                      View Activity Logs
+                    </button>
+                  </div>
+                ))
+              ) : (
+                <div className="no-students">
+                  <FaUser size={48} />
+                  <p>No students connected yet</p>
+                  <p>Waiting for students to join...</p>
+                </div>
+              )}
             </div>
           )}
         </div>
-      )}
+
+        {isLogsOpen && (
+          <div className="logs-section">
+            <div className="logs-header">
+              <h3>🔍 Activity Monitor (Last 3 mins)</h3>
+              <button 
+                className="close-logs"
+                onClick={() => setIsLogsOpen(false)}
+                title="Close logs"
+              >
+                ×
+              </button>
+            </div>
+            
+            {isLoadingLogs ? (
+              <div className="loading-logs">
+                <div className="spinner"></div>
+                <p>Loading activity logs...</p>
+              </div>
+            ) : logs.length > 0 ? (
+              <div className="logs-list">
+                {logs.map((log, index) => {
+                  // Determine log severity
+                  const isWarning = [
+                    'tab_change', 'window_blur', 'print', 'devtools', 
+                    'inactivity', 'multiple_faces', 'face_not_visible',
+                    'tab_switch', 'fullscreen_exit', 'keyboard_shortcut'
+                  ].includes(log.event_type);
+                  
+                  return (
+                    <div 
+                      key={index} 
+                      className={`log-item ${isWarning ? 'warning' : 'info'}`}
+                      title={`Event type: ${log.event_type}`}
+                    >
+                      <div className="log-icon">
+                        {isWarning ? (
+                          <FaExclamationTriangle className="warning" />
+                        ) : (
+                          <FaInfoCircle className="info" />
+                        )}
+                      </div>
+                      <div className="log-content">
+                        <div className="log-message">
+                          <span className="student-id">
+                            {log.student_id ? `Student ${log.student_id.substring(0, 8)}` : 'System'}
+                          </span>
+                          {' - '}
+                          {formatLogMessage(log)}
+                        </div>
+                        <div className="log-timestamp">
+                          {new Date(log.created_at).toLocaleTimeString()}
+                          {log.event_details && Object.keys(log.event_details).length > 0 && (
+                            <span className="log-details" title={JSON.stringify(log.event_details, null, 2)}>
+                              [Details]
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="no-logs">
+                <p>No recent activity detected</p>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       <style jsx>{`
         .live-monitoring {
           padding: 20px;
-          max-width: 1400px;
+          max-width: 1800px;
           margin: 0 auto;
           font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        .monitoring-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 20px;
+        }
+        
+        .monitoring-container {
+          display: flex;
+          gap: 20px;
+        }
+        
+        .students-section {
+          flex: 1;
+          transition: all 0.3s ease;
+        }
+        
+        .students-section.with-logs {
+          width: 60%;
+        }
+        
+        .logs-section {
+          width: 40%;
+          background: white;
+          border-radius: 8px;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+          overflow: hidden;
+          display: flex;
+          flex-direction: column;
+        }
+        
+        .logs-header {
+          padding: 15px 20px;
+          background: #f8f9fa;
+          border-bottom: 1px solid #eee;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        }
+        
+        .logs-header h3 {
+          margin: 0;
+          font-size: 1.1rem;
+          color: #333;
+        }
+        
+        .student-name {
+          font-weight: 500;
+          color: #555;
+        }
+        
+        .close-logs {
+          background: none;
+          border: none;
+          font-size: 1.5rem;
+          cursor: pointer;
+          color: #999;
+          padding: 0 5px;
+          line-height: 1;
+        }
+        
+        .close-logs:hover {
+          color: #333;
+        }
+        
+        .logs-list {
+          flex: 1;
+          overflow-y: auto;
+          max-height: 70vh;
+        }
+        
+        .log-item {
+          padding: 12px 20px;
+          border-bottom: 1px solid #f0f0f0;
+          display: flex;
+          gap: 12px;
+          align-items: flex-start;
+          transition: all 0.2s ease;
+        }
+        
+        .log-item.warning {
+          background-color: #fff8e6;
+          border-left: 3px solid #ffc107;
+        }
+        
+        .log-item.info {
+          background-color: #f8f9fa;
+          border-left: 3px solid #17a2b8;
+        }
+        
+        .log-item:hover {
+          background-color: #f1f1f1;
+          transform: translateX(2px);
+        }
+        
+        .student-id {
+          font-weight: 600;
+          color: #333;
+        }
+        
+        .log-details {
+          margin-left: 8px;
+          font-size: 0.8em;
+          color: #6c757d;
+          cursor: help;
+          text-decoration: underline;
+          text-decoration-style: dotted;
+        }
+        
+        .log-icon {
+          font-size: 1rem;
+          margin-top: 2px;
+        }
+        
+        .log-icon .warning {
+          color: #ff9800;
+        }
+        
+        .log-icon .info {
+          color: #2196f3;
+        }
+        
+        .log-content {
+          flex: 1;
+        }
+        
+        .log-message {
+          font-size: 0.9rem;
+          color: #333;
+          margin-bottom: 4px;
+        }
+        
+        .log-timestamp {
+          font-size: 0.75rem;
+          color: #888;
+        }
+        
+        .no-logs, .loading-logs {
+          padding: 40px 20px;
+          text-align: center;
+          color: #666;
+        }
+        
+        .logs-toggle, .view-logs-btn {
+          background: #4a6cf7;
+          color: white;
+          border: none;
+          padding: 8px 16px;
+          border-radius: 4px;
+          cursor: pointer;
+          font-size: 0.9rem;
+          transition: background 0.2s;
+        }
+        
+        .logs-toggle:hover, .view-logs-btn:hover {
+          background: #3a5ce4;
+        }
+        
+        .view-logs-btn {
+          display: block;
+          width: 100%;
+          margin-top: 10px;
+          background: #6c757d;
+        }
+        
+        .view-logs-btn:hover {
+          background: #5a6268;
         }
         
         .error-message {

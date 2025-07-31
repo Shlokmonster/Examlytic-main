@@ -19,6 +19,8 @@
   border-radius: 8px;
   overflow: hidden;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  align-items: center;
+  justify-content: center;
 }
 
 .recording-video {
@@ -225,6 +227,9 @@
   border-radius: 8px;
   overflow: hidden;
   margin-bottom: 1.5rem;
+  align-items: center;
+  justify-content: center;
+  display: flex;
 }
 
 .recording-video {
@@ -232,6 +237,8 @@
   max-height: 60vh;
   display: block;
   cursor: pointer;
+  align-items: center;
+  justify-content: center;
 }
 
 .video-controls {

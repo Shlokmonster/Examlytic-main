@@ -44,8 +44,8 @@ function Examcode() {
                 // Use window.location for more reliable navigation
                 window.location.href = `/exam/${trimmedCode}/blocked`;
             } else {
-                console.log('Exam is active, redirecting to exam page');
-                window.location.href = `/exam/${trimmedCode}`;
+                console.log('Exam is active, redirecting to diagnostics page');
+                navigate(`/diagnostics/${trimmedCode}`);
             }
         } catch (err) {
             setIsLoading(false);

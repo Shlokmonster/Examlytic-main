@@ -1991,14 +1991,7 @@ useEffect(() => {
                 </div>
               ) : (
                 <>
-                  <div className="back-button" style={{ marginBottom: '20px' }}>
-                    <button 
-                      onClick={() => setSelectedStudentForRecordings(null)}
-                      className="btn btn-secondary"
-                    >
-                      ← Back to Students
-                    </button>
-                  </div>
+
                   <div className="recordings-container" style={{ marginTop: '20px' }}>
                     <StudentRecordings 
                       examId={selectedExamForRecordings.id}
