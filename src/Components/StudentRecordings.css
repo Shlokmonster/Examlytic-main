@@ -1,0 +1,372 @@
+/* Main Container */
+.student-recordings-container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 2rem 1rem;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Video Container */
+.video-container {
+  position: relative;
+  width: 100%;
+  max-width: 800px;
+  margin: 0 auto;
+  background: #000;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.recording-video {
+  width: 100%;
+  height: auto;
+  display: block;
+  aspect-ratio: 16/9;
+}
+
+/* Video Controls */
+.video-controls {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.7));
+  padding: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.video-container:hover .video-controls {
+  opacity: 1;
+}
+
+.control-button {
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.control-button:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.control-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Recording Details */
+.recording-details {
+  padding: 1.5rem;
+  background: white;
+  border-radius: 8px;
+  margin-top: 1rem;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.recording-details h3 {
+  margin: 0 0 0.5rem 0;
+  color: #1e293b;
+}
+
+.recording-date {
+  color: #64748b;
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+/* Student Header */
+.student-header {
+  margin-bottom: 2rem;
+  text-align: center;
+}
+
+.student-header h2 {
+  color: #1e293b;
+  margin-bottom: 0.5rem;
+}
+
+.student-email {
+  color: #64748b;
+  font-size: 0.95rem;
+}
+
+/* Recordings Grid */
+.recordings-grid {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: 2rem;
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  overflow: hidden;
+}
+
+/* Recordings List */
+.recordings-list {
+  padding: 1.5rem;
+  border-right: 1px solid #e2e8f0;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.recordings-list h3 {
+  color: #334155;
+  margin-bottom: 1.5rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.recording-card {
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.recording-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+}
+
+.recording-card.active {
+  border-color: #3b82f6;
+  background-color: #eff6ff;
+}
+
+.recording-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.recording-date {
+  font-size: 0.85rem;
+  color: #475569;
+}
+
+.recording-score {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #10b981;
+  background: #ecfdf5;
+  padding: 0.25rem 0.5rem;
+  border-radius: 9999px;
+}
+
+.recording-duration {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: #64748b;
+}
+
+.video-icon {
+  color: #3b82f6;
+}
+
+/* No Recordings */
+.no-recordings,
+.no-recording-selected {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  color: #94a3b8;
+  font-style: italic;
+}
+
+/* Recording Player */
+.recording-player {
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.player-header {
+  margin-bottom: 1.5rem;
+}
+
+.player-header h3 {
+  color: #334155;
+  margin-bottom: 0.5rem;
+}
+
+.recording-date {
+  font-size: 0.9rem;
+  color: #64748b;
+}
+
+/* Video Container */
+.video-container {
+  position: relative;
+  background: #000;
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 1.5rem;
+}
+
+.recording-video {
+  width: 100%;
+  max-height: 60vh;
+  display: block;
+  cursor: pointer;
+}
+
+.video-controls {
+  position: absolute;
+  bottom: 1rem;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.video-container:hover .video-controls {
+  opacity: 1;
+}
+
+.play-pause-btn {
+  background: rgba(0, 0, 0, 0.7);
+  border: none;
+  border-radius: 50%;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.play-pause-btn:hover {
+  background: rgba(0, 0, 0, 0.9);
+  transform: scale(1.1);
+}
+
+/* Recording Meta */
+.recording-meta {
+  display: flex;
+  gap: 2rem;
+  margin-bottom: 1.5rem;
+  padding: 1rem 0;
+  border-top: 1px solid #e2e8f0;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.meta-label {
+  font-size: 0.85rem;
+  color: #64748b;
+}
+
+.score {
+  font-weight: 600;
+  font-size: 1.1rem;
+}
+
+.score.pass {
+  color: #10b981;
+}
+
+.score.fail {
+  color: #ef4444;
+}
+
+/* Recording Actions */
+.recording-actions {
+  display: flex;
+  justify-content: center;
+  margin-top: auto;
+}
+
+.download-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background-color: #3b82f6;
+  color: white;
+  padding: 0.75rem 1.5rem;
+  border-radius: 6px;
+  font-weight: 500;
+  text-decoration: none;
+  transition: background-color 0.2s;
+}
+
+.download-btn:hover {
+  background-color: #2563eb;
+}
+
+/* Loading and Error States */
+.loading-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  gap: 1rem;
+}
+
+.spinner {
+  animation: spin 1s linear infinite;
+  font-size: 2rem;
+  color: #3b82f6;
+}
+
+.error-message {
+  padding: 1.5rem;
+  background: #fee2e2;
+  color: #b91c1c;
+  border-radius: 8px;
+  text-align: center;
+  margin: 1rem 0;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Responsive Design */
+@media (max-width: 1024px) {
+  .recordings-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .recordings-list {
+    max-height: 300px;
+    border-right: none;
+    border-bottom: 1px solid #e2e8f0;
+  }
+}
+
+/* All styles have been consolidated above */

@@ -8,15 +8,117 @@ const LiveMonitoring = () => {
   const [fullscreen, setFullscreen] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [recordedStreams, setRecordedStreams] = useState({});
+  const mediaRecorders = useRef({});
   
   const peerRef = useRef(null);
   const connections = useRef({});
   const videoRefs = useRef({});
   const mediaStreams = useRef({});
 
+  // Function to save stream data to localStorage with exam and student info
+  const saveStreamToLocalStorage = useCallback((studentId, blob, metadata = {}) => {
+    try {
+      const reader = new FileReader();
+      reader.readAsDataURL(blob);
+      reader.onloadend = () => {
+        const base64data = reader.result;
+        const recordings = JSON.parse(localStorage.getItem('studentRecordings') || '{}');
+        const recordingKey = `${metadata.examId}_${studentId}`;
+        
+        recordings[recordingKey] = recordings[recordingKey] || {
+          examId: metadata.examId,
+          studentId: studentId,
+          studentName: metadata.studentName || 'Unknown Student',
+          examName: metadata.examName || 'Unknown Exam',
+          recordings: []
+        };
+        
+        recordings[recordingKey].recordings.push({
+          timestamp: new Date().toISOString(),
+          data: base64data
+        });
+        
+        // Keep only the last 100 recordings per student per exam
+        if (recordings[recordingKey].recordings.length > 100) {
+          recordings[recordingKey].recordings = recordings[recordingKey].recordings.slice(-100);
+        }
+        
+        localStorage.setItem('studentRecordings', JSON.stringify(recordings));
+        setRecordedStreams(recordings);
+      };
+    } catch (err) {
+      console.error('Error saving stream to localStorage:', err);
+    }
+  }, []);
+
+  // Function to start recording a stream
+  const startRecordingStream = useCallback((stream, studentId, metadata = {}) => {
+    try {
+      // Stop any existing recorder for this student
+      if (mediaRecorders.current[studentId]) {
+        mediaRecorders.current[studentId].stop();
+      }
+
+      // Create a MediaRecorder instance
+      const mediaRecorder = new MediaRecorder(stream, {
+        mimeType: 'video/webm;codecs=vp9',
+        videoBitsPerSecond: 2500000 // 2.5Mbps
+      });
+
+      const recordedChunks = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          recordedChunks.push(event.data);
+          saveStreamToLocalStorage(studentId, event.data, {
+            examId: metadata.examId || 'unknown_exam',
+            studentName: metadata.studentName || 'Unknown Student',
+            examName: metadata.examName || 'Unknown Exam'
+          });
+        }
+      };
+
+      mediaRecorder.onstop = () => {
+        // Cleanup
+        delete mediaRecorders.current[studentId];
+      };
+
+      // Start recording, and save a chunk every 5 seconds
+      mediaRecorder.start(5000);
+      mediaRecorders.current[studentId] = mediaRecorder;
+
+    } catch (err) {
+      console.error('Error starting stream recording:', err);
+    }
+  }, [saveStreamToLocalStorage]);
+
+  // Function to get all recordings for a student
+  const getStudentRecordings = useCallback((studentId) => {
+    try {
+      const recordings = JSON.parse(localStorage.getItem('studentRecordings') || '{}');
+      return recordings[studentId] || [];
+    } catch (err) {
+      console.error('Error getting student recordings:', err);
+      return [];
+    }
+  }, []);
+
   // Cleanup function
   const cleanup = useCallback(() => {
     console.log('Cleaning up resources...');
+    
+    // Stop all media recorders first
+    Object.entries(mediaRecorders.current).forEach(([id, recorder]) => {
+      try {
+        if (recorder && recorder.state !== 'inactive') {
+          recorder.stop();
+        }
+      } catch (e) {
+        console.error('Error stopping recorder:', e);
+      }
+    });
+    mediaRecorders.current = {};
     
     // Close all peer connections
     Object.entries(connections.current).forEach(([id, conn]) => {
@@ -32,6 +134,18 @@ const LiveMonitoring = () => {
       }
     });
     connections.current = {};
+
+    // Stop all media recorders
+    Object.entries(mediaRecorders.current).forEach(([id, recorder]) => {
+      try {
+        if (recorder && recorder.state !== 'inactive') {
+          recorder.stop();
+        }
+      } catch (e) {
+        console.error('Error stopping recorder:', e);
+      }
+    });
+    mediaRecorders.current = {};
 
     // Stop all media tracks
     Object.entries(mediaStreams.current).forEach(([id, stream]) => {
@@ -279,11 +393,28 @@ const LiveMonitoring = () => {
       call.on('stream', (remoteStream) => {
         console.log('Received stream from student:', call.peer, remoteStream);
         handleIncomingStream(call.peer, remoteStream);
+        
+        // Get exam and student info from the call metadata or connection data
+        const examId = call.metadata?.examId || 'unknown_exam';
+        const studentName = call.metadata?.studentName || 'Unknown Student';
+        const examName = call.metadata?.examName || 'Unknown Exam';
+        
+        startRecordingStream(remoteStream, call.peer, {
+          examId,
+          studentName,
+          examName
+        });
       });
       
       call.on('close', () => {
         console.log('Call ended with student:', call.peer);
         cleanupOldConnection(call.peer);
+        
+        // Stop the recorder for this student
+        if (mediaRecorders.current[call.peer]) {
+          mediaRecorders.current[call.peer].stop();
+          delete mediaRecorders.current[call.peer];
+        }
       });
       
       call.on('error', (err) => {

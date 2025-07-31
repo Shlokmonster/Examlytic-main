@@ -2,11 +2,11 @@ import { useEffect, useState, useRef } from "react"
 import { Link, useNavigate, useParams } from "react-router-dom"
 import supabase from "../SupabaseClient"
 import Navbar from "../Components/common/Navbar"
-import TestComponent from "../Components/TestComponent"
 import LiveMonitoring from "../Components/LiveMonitoring"
+import StudentRecordings from "../Components/StudentRecordings"
 
 import { toast } from "react-toastify"
-import { FaLock, FaUnlock, FaEye, FaTrash, FaEdit, FaLink, FaCopy, FaVideo, FaArrowLeft } from "react-icons/fa"
+import { FaLock, FaUnlock, FaEye, FaTrash, FaEdit, FaLink, FaCopy, FaVideo, FaArrowLeft, FaHistory } from "react-icons/fa"
 
 // Modal component for viewing/editing questions
 const QuestionModal = ({ exam, onClose, onSave }) => {
@@ -236,13 +236,19 @@ const QuestionModal = ({ exam, onClose, onSave }) => {
           display: flex;
           flex-direction: column;
           gap: 20px;
+          align-items: center;
+          justify-content: center;
         }
         .question-card {
           background: #f9f9f9;
-          padding: 15px;
+          padding: 50px;
           border-radius: 6px;
           border-left: 4px solid #4CAF50;
           position: relative;
+          margin-bottom: 20px;
+          align-items: center;
+          justify-content: center;
+         width:1000px;
         }
         
         .delete-question {
@@ -289,7 +295,7 @@ const QuestionModal = ({ exam, onClose, onSave }) => {
         .options-grid {
           display: grid;
           grid-template-columns: 1fr 1fr;
-          gap: 15px;
+          gap: 40px;
           margin: 15px 0;
         }
         .correct-answer {
@@ -398,7 +404,6 @@ const QuestionModal = ({ exam, onClose, onSave }) => {
     .admin-dashboard {
       min-height: 100vh;
       background-color: #f5f7fa;
-      padding: 20px;
     }
 
     .admin-container {
@@ -730,10 +735,147 @@ export default function AdminDashboard() {
   const [copied, setCopied] = useState(false);
   const [loadingStates, setLoadingStates] = useState({});
   const [initialLoad, setInitialLoad] = useState(true);
+  const [activeTab, setActiveTab] = useState('exams'); // 'exams', 'monitoring', or 'recordings'
+  const [selectedExamForRecordings, setSelectedExamForRecordings] = useState(null);
+  const [selectedStudentForRecordings, setSelectedStudentForRecordings] = useState(null);
+  const [recordingsLoading, setRecordingsLoading] = useState(false);
+  const [recordingsError, setRecordingsError] = useState(null);
   const [view, setView] = useState('list'); // 'list', 'monitor', or 'users'
+  const [examLogs, setExamLogs] = useState([]);
+  const [loadingLogs, setLoadingLogs] = useState(false);
   const [selectedUser, setSelectedUser] = useState(null);
   const [users, setUsers] = useState([]);
   const [userAttempts, setUserAttempts] = useState([]);
+  const [recordings, setRecordings] = useState([]);
+
+// Fetch all exam attempts with recordings
+const fetchAllRecordings = async () => {
+  try {
+    setRecordingsLoading(true);
+    
+    // First, get all exams that have been attempted
+    const { data: examAttempts, error: attemptsError } = await supabase
+      .from('exam_attempts')
+      .select('exam_id, student_id, submitted_at, recording_url')
+      .not('recording_url', 'is', null)
+      .order('submitted_at', { ascending: false });
+
+    if (attemptsError) throw attemptsError;
+
+    // If no attempts found, set empty array and return
+    if (!examAttempts || examAttempts.length === 0) {
+      setRecordings([]);
+      setRecordingsLoading(false);
+      return;
+    }
+
+    // Get unique exam IDs and student IDs
+    const examIds = [...new Set(examAttempts.map(attempt => attempt.exam_id))];
+    const studentIds = [...new Set(examAttempts.map(attempt => attempt.student_id))];
+
+    // Fetch exam details
+    const { data: examsData, error: examsError } = await supabase
+      .from('exams')
+      .select('id, title, subject, duration_minutes')
+      .in('id', examIds);
+
+    if (examsError) throw examsError;
+
+    // Fetch only the available columns from users table
+    const { data: studentsData, error: studentsError } = await supabase
+      .from('users')
+      .select('id, email')
+      .in('id', studentIds);
+      
+    // Use email as the display name if name is not available
+    const studentsWithFullName = studentsData?.map(student => ({
+      ...student,
+      full_name: student.email.split('@')[0] // Use the part before @ in email as name
+    })) || [];
+
+    if (studentsError) throw studentsError;
+
+    // Create lookup objects
+    const examsMap = examsData.reduce((acc, exam) => ({
+      ...acc,
+      [exam.id]: exam
+    }), {});
+
+    const studentsMap = studentsWithFullName.reduce((acc, student) => ({
+      ...acc,
+      [student.id]: student
+    }), {});
+
+    // Group attempts by exam
+    const examsWithAttempts = examAttempts.reduce((acc, attempt) => {
+      const exam = examsMap[attempt.exam_id];
+      const student = studentsMap[attempt.student_id];
+      
+      if (!exam || !student) return acc;
+      
+      const examIndex = acc.findIndex(e => e.id === exam.id);
+      
+      if (examIndex === -1) {
+        // New exam, add with this student
+        acc.push({
+          ...exam,
+          participants: [{
+            id: student.id,
+            name: student.full_name || `Student ${student.id.substring(0, 6)}`,
+            email: student.email,
+            lastAttempt: attempt.submitted_at
+          }],
+          lastRecording: attempt.submitted_at
+        });
+      } else {
+        // Existing exam, add student if not already present
+        const existingParticipant = acc[examIndex].participants.find(p => p.id === student.id);
+        if (!existingParticipant) {
+          acc[examIndex].participants.push({
+            id: student.id,
+            name: student.full_name || `Student ${student.id.substring(0, 6)}`,
+            email: student.email,
+            lastAttempt: attempt.submitted_at
+          });
+        }
+        // Update last recording timestamp if this one is newer
+        if (new Date(attempt.submitted_at) > new Date(acc[examIndex].lastRecording || 0)) {
+          acc[examIndex].lastRecording = attempt.submitted_at;
+        }
+      }
+      return acc;
+    }, []);
+
+    // Update state with the processed data
+    setExams(prevExams => {
+      // Merge with existing exams to preserve other data
+      const merged = [...prevExams];
+      examsWithAttempts.forEach(exam => {
+        const existingIndex = merged.findIndex(e => e.id === exam.id);
+        if (existingIndex >= 0) {
+          merged[existingIndex] = { ...merged[existingIndex], ...exam };
+        } else {
+          merged.push(exam);
+        }
+      });
+      return merged;
+    });
+
+    // Set the recordings from exam attempts
+    setRecordings(examAttempts);
+    setRecordingsLoading(false);
+  } catch (error) {
+    console.error('Error fetching recordings:', error);
+    // Set an empty array to prevent rendering errors
+    setRecordings([]);
+  }
+};
+
+useEffect(() => {
+  fetchAllRecordings();
+}, []);
+
+
 
   // Modal component for exam answers
   const ExamAnswersModal = () => (
@@ -1073,6 +1215,41 @@ export default function AdminDashboard() {
     );
   }
 
+  // Fetch exam logs for a specific attempt
+  const fetchExamLogs = async (examId, studentId) => {
+    try {
+      setLoadingLogs(true);
+      // First, get the exam_attempt_id for this student and exam
+      const { data: attempts, error: attemptError } = await supabase
+        .from('exam_attempts')
+        .select('id')
+        .eq('exam_id', examId)
+        .eq('student_id', studentId)
+        .single();
+
+      if (attemptError) throw attemptError;
+      if (!attempts) return [];
+
+      // Then get the logs for this exam attempt
+      const { data, error } = await supabase
+        .from('exam_logs')
+        .select('*')
+        .eq('exam_attempt_id', attempts.id)
+        .order('created_at', { ascending: true });
+
+      if (error) throw error;
+      
+      setExamLogs(data || []);
+      return data || [];
+    } catch (error) {
+      console.error('Error fetching exam logs:', error);
+      toast.error('Failed to load exam logs');
+      return [];
+    } finally {
+      setLoadingLogs(false);
+    }
+  };
+
   // Fetch users and their attempts
   const fetchUsers = async () => {
     try {
@@ -1370,42 +1547,106 @@ export default function AdminDashboard() {
                       background: index % 2 === 0 ? '#f9f9f9' : 'white',
                       borderBottom: '1px solid #eee',
                       cursor: 'pointer',
-                      transition: 'background-color 0.2s'
+                      transition: 'background-color 0.2s',
+                      position: 'relative'
                     }}
-                    onClick={() => {
+                    onClick={async () => {
                       setSelectedExam(exam);
+                      // Fetch exam logs when an exam is selected
+                      await fetchExamLogs(exam.exam_id, selectedUser.id);
                       console.log('Selected exam:', exam);
                     }}
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div>
-                        <h4 style={{ margin: '0 0 5px 0' }}>{exam.exam_title}</h4>
-                        <p style={{ color: '#666', margin: 0 }}>
-                          Submitted: {new Date(exam.submitted_at).toLocaleString()}
-                        </p>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
-                          <div className="exam-avatar" style={{
-                            width: '32px',
-                            height: '32px',
-                            borderRadius: '50%',
-                            backgroundColor: '#f3f4f6',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            overflow: 'hidden',
-                            border: '1px solid #e5e7eb'
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '15px', width: '100%' }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
+                          <h4 style={{ margin: 0 }}>{exam.exam_title}</h4>
+                          <span style={{ fontSize: '0.8em', color: '#666' }}>
+                            {new Date(exam.submitted_at).toLocaleString()}
+                          </span>
+                        </div>
+                        
+                        {selectedExam?.id === exam.id && (
+                          <div style={{
+                            marginTop: '10px',
+                            padding: '10px',
+                            background: '#f8fafc',
+                            borderRadius: '6px',
+                            borderLeft: '3px solid #3b82f6'
                           }}>
-                            {exam.user_avatar ? (
-                              <img 
-                                src={exam.user_avatar} 
-                                alt={`${exam.user_name || exam.user_email} avatar`} 
-                                style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }}
-                              />
-                            ) : (
-                              <span style={{ fontSize: '16px', fontWeight: 'bold', color: '#9ca3af' }}>
-                                {exam.user_name ? exam.user_name[0].toUpperCase() : exam.user_email[0].toUpperCase()}
-                              </span>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                              <strong>Activity Logs</strong>
+                              {loadingLogs && <span style={{ fontSize: '0.8em', color: '#666' }}>Loading...</span>}
+                            </div>
+                            
+                            {examLogs.length > 0 ? (
+                              <div style={{ maxHeight: '150px', overflowY: 'auto', fontSize: '0.85em' }}>
+                                {examLogs.map((log, idx) => (
+                                  <div key={log.id} style={{
+                                    padding: '6px 0',
+                                    borderBottom: idx < examLogs.length - 1 ? '1px solid #e2e8f0' : 'none',
+                                    display: 'flex',
+                                    gap: '10px',
+                                    alignItems: 'flex-start'
+                                  }}>
+                                    <span style={{ color: '#3b82f6', whiteSpace: 'nowrap' }}>
+                                      {new Date(log.createdat).toLocaleTimeString()}
+                                    </span>
+                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                      <div style={{ fontWeight: 500, marginBottom: '2px' }}>
+                                        {log.eventtype.replace(/_/g, ' ')}
+                                      </div>
+                                      {log.eventdetails && (
+                                        <div style={{
+                                          color: '#64748b',
+                                          fontSize: '0.8em',
+                                          whiteSpace: 'nowrap',
+                                          overflow: 'hidden',
+                                          textOverflow: 'ellipsis'
+                                        }}>
+                                          {JSON.stringify(log.eventdetails)}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : !loadingLogs && (
+                              <div style={{ color: '#64748b', fontStyle: 'italic', fontSize: '0.9em' }}>
+                                No activity logs found for this attempt.
+                              </div>
                             )}
+                          </div>
+                        )}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '10px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <div className="exam-avatar" style={{
+                              width: '28px',
+                              height: '28px',
+                              borderRadius: '50%',
+                              backgroundColor: '#f3f4f6',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              overflow: 'hidden',
+                              border: '1px solid #e5e7eb',
+                              flexShrink: 0
+                            }}>
+                              {exam.user_avatar ? (
+                                <img 
+                                  src={exam.user_avatar} 
+                                  alt={`${exam.user_name || exam.user_email} avatar`} 
+                                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                />
+                              ) : (
+                                <span style={{ fontSize: '12px', fontWeight: 'bold', color: '#9ca3af' }}>
+                                  {exam.user_name ? exam.user_name[0].toUpperCase() : (exam.user_email?.[0]?.toUpperCase() || 'U')}
+                                </span>
+                              )}
+                            </div>
+                            <span style={{ fontSize: '0.85em', color: '#4b5563' }}>
+                              {exam.user_name || exam.user_email || 'Unknown User'}
+                            </span>
                           </div>
                           <div>
                             <p style={{ 
@@ -1481,9 +1722,302 @@ export default function AdminDashboard() {
     );
   }
 
+  // Render recordings view
+  if (view === 'recordings') {
+    return (
+      <div className="admin-dashboard">
+        <Navbar />
+        <div className="admin-container" style={{ padding: '20px' }}>
+          <button 
+            onClick={() => {
+              if (selectedStudentForRecordings) {
+                setSelectedStudentForRecordings(null);
+              } else if (selectedExamForRecordings) {
+                setSelectedExamForRecordings(null);
+              } else {
+                setView('list');
+              }
+            }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              marginBottom: '20px',
+              background: 'none',
+              border: 'none',
+              color: '#4a5568',
+              cursor: 'pointer',
+              fontSize: '16px',
+              padding: '8px 0'
+            }}
+          >
+            <FaArrowLeft /> {selectedStudentForRecordings ? 'Back to Students' : selectedExamForRecordings ? 'Back to Exams' : 'Back to Dashboard'}
+          </button>
+          
+          <h1 style={{ marginBottom: '20px' }}>
+            {selectedStudentForRecordings 
+              ? `Recordings for Student: ${selectedStudentForRecordings}` 
+              : selectedExamForRecordings 
+                ? `Students in ${selectedExamForRecordings.title}` 
+                : 'Exam Recordings'}
+          </h1>
+
+          {!selectedExamForRecordings ? (
+            <div className="exam-grid">
+              {exams.filter(exam => exam.participants?.length > 0).length > 0 ? (
+                exams
+                  .filter(exam => exam.participants?.length > 0)
+                  .sort((a, b) => new Date(b.lastRecording || 0) - new Date(a.lastRecording || 0))
+                  .map((exam) => (
+                    <div 
+                      key={exam.id} 
+                      className="exam-card"
+                      onClick={() => setSelectedExamForRecordings(exam)}
+                      style={{ 
+                        cursor: 'pointer',
+                        background: 'white',
+                        borderRadius: '8px',
+                        boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+                        overflow: 'hidden',
+                        transition: 'transform 0.2s, box-shadow 0.2s'
+                      }}
+                    >
+                      <div className="exam-card-header" style={{ 
+                        padding: '16px',
+                        borderBottom: '1px solid #eee',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center'
+                      }}>
+                        <h3 style={{ margin: 0, fontSize: '1.1rem' }}>{exam.title}</h3>
+                        <div className="exam-status" style={{
+                          background: '#e6f7ff',
+                          color: '#1890ff',
+                          padding: '4px 8px',
+                          borderRadius: '12px',
+                          fontSize: '0.8rem',
+                          fontWeight: '500'
+                        }}>
+                          {exam.participants?.length || 0} {exam.participants?.length === 1 ? 'Student' : 'Students'}
+                        </div>
+                      </div>
+                      <div className="exam-details" style={{ padding: '16px' }}>
+                        <div className="detail-item" style={{ marginBottom: '8px' }}>
+                          <span className="detail-label" style={{
+                            color: '#666',
+                            marginRight: '8px',
+                            fontSize: '0.9rem'
+                          }}>Subject:</span>
+                          <span className="detail-value" style={{ fontWeight: '500' }}>
+                            {exam.subject || 'General'}
+                          </span>
+                        </div>
+                        <div className="detail-item" style={{ marginBottom: '8px' }}>
+                          <span className="detail-label" style={{
+                            color: '#666',
+                            marginRight: '8px',
+                            fontSize: '0.9rem'
+                          }}>Duration:</span>
+                          <span className="detail-value">
+                            {exam.duration_minutes} minutes
+                          </span>
+                        </div>
+                        <div className="detail-item" style={{ 
+                          marginTop: '12px',
+                          fontSize: '0.85rem',
+                          color: '#666',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between'
+                        }}>
+                          <span>Last recording:</span>
+                          <span style={{ fontWeight: '500' }}>
+                            {exam.lastRecording ? new Date(exam.lastRecording).toLocaleDateString() : 'No recordings'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+              ) : (
+                <div style={{
+                  gridColumn: '1 / -1',
+                  textAlign: 'center',
+                  padding: '40px 20px',
+                  color: '#666'
+                }}>
+                  <p style={{ fontSize: '1.1rem', marginBottom: '10px' }}>No exam recordings found</p>
+                  <p style={{ fontSize: '0.9rem' }}>Students' exam recordings will appear here once they complete their exams.</p>
+                </div>
+              )}
+            </div>
+          ) : !selectedStudentForRecordings ? (
+            <div className="students-grid" style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+              gap: '16px',
+              width: '100%'
+            }}>
+              {selectedExamForRecordings.participants?.length > 0 ? (
+                [...selectedExamForRecordings.participants]
+                  .sort((a, b) => new Date(b.lastAttempt || 0) - new Date(a.lastAttempt || 0))
+                  .map((student) => {
+                    // Find all recordings for this student and exam
+                    const studentRecordings = recordings.filter(
+                      r => r.student_id === student.id && 
+                           r.exam_id === selectedExamForRecordings.id
+                    );
+                    
+                    return (
+                      <div 
+                        key={student.id}
+                        className="student-card"
+                        onClick={() => setSelectedStudentForRecordings(student.id)}
+                        style={{
+                          background: 'white',
+                          borderRadius: '8px',
+                          padding: '16px',
+                          boxShadow: '0 2px 4px rgba(0,0,0,0.08)',
+                          cursor: 'pointer',
+                          transition: 'transform 0.2s, box-shadow 0.2s',
+                          border: '1px solid #eee',
+                          '&:hover': {
+                            transform: 'translateY(-2px)',
+                            boxShadow: '0 4px 8px rgba(0,0,0,0.12)'
+                          }
+                        }}
+                      >
+                        <div style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '12px',
+                          marginBottom: '12px'
+                        }}>
+                          <div style={{
+                            width: '44px',
+                            height: '44px',
+                            borderRadius: '50%',
+                            background: '#1890ff',
+                            color: 'white',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontWeight: 'bold',
+                            fontSize: '1.1rem',
+                            flexShrink: 0
+                          }}>
+                            {student.name ? student.name[0].toUpperCase() : 'S'}
+                          </div>
+                          <div style={{ overflow: 'hidden' }}>
+                            <h4 style={{ 
+                              margin: '0 0 4px 0',
+                              whiteSpace: 'nowrap',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis'
+                            }}>
+                              {student.name || `Student ${student.id.substring(0, 6)}`}
+                            </h4>
+                            <p style={{ 
+                              margin: 0, 
+                              color: '#666', 
+                              fontSize: '0.85rem',
+                              whiteSpace: 'nowrap',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis'
+                            }}>
+                              {student.email || 'No email'}
+                            </p>
+                          </div>
+                        </div>
+                        
+                        <div style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          fontSize: '0.85rem',
+                          color: '#666',
+                          paddingTop: '10px',
+                          borderTop: '1px solid #f0f0f0',
+                          marginTop: '10px'
+                        }}>
+                          <div>
+                            <div style={{ fontSize: '0.8rem', marginBottom: '2px' }}>Recordings</div>
+                            <div style={{ fontWeight: '500', color: '#1890ff' }}>
+                              {studentRecordings.length}
+                            </div>
+                          </div>
+                          <div style={{ textAlign: 'right' }}>
+                            <div style={{ fontSize: '0.8rem', marginBottom: '2px' }}>Last attempt</div>
+                            <div style={{ fontWeight: '500' }}>
+                              {student.lastAttempt ? new Date(student.lastAttempt).toLocaleDateString() : 'N/A'}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
+              ) : (
+                <div style={{
+                  gridColumn: '1 / -1',
+                  textAlign: 'center',
+                  padding: '40px 20px',
+                  color: '#666',
+                  background: 'white',
+                  borderRadius: '8px',
+                  boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+                }}>
+                  <p style={{ fontSize: '1.1rem', marginBottom: '10px' }}>No students found</p>
+                  <p style={{ fontSize: '0.9rem', color: '#888' }}>
+                    {selectedExamForRecordings.participants?.length === 0 
+                      ? 'No students have taken this exam yet.' 
+                      : 'No matching students found.'}
+                  </p>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="recordings-container">
+              {recordingsError ? (
+                <div className="error-message">
+                  {recordingsError}
+                  <button 
+                    onClick={() => {
+                      setRecordingsError(null);
+                      setSelectedStudentForRecordings(null);
+                    }}
+                    className="btn btn-primary"
+                    style={{ marginTop: '10px' }}
+                  >
+                    Back to Students
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="back-button" style={{ marginBottom: '20px' }}>
+                    <button 
+                      onClick={() => setSelectedStudentForRecordings(null)}
+                      className="btn btn-secondary"
+                    >
+                      ← Back to Students
+                    </button>
+                  </div>
+                  <div className="recordings-container" style={{ marginTop: '20px' }}>
+                    <StudentRecordings 
+                      examId={selectedExamForRecordings.id}
+                      studentId={selectedStudentForRecordings}
+                      onError={(error) => setRecordingsError(error || null)}
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="admin-dashboard">
-      <TestComponent />
+
       <Navbar />
       <div className="admin-container">
         <div className="admin-header">
@@ -1504,6 +2038,16 @@ export default function AdminDashboard() {
               }}
             >
               View Users
+            </button>
+            <button 
+              className="btn btn-info"
+              onClick={() => {
+                setView('recordings');
+                setSelectedExamForRecordings(null);
+                setSelectedStudentForRecordings(null);
+              }}
+            >
+              <FaHistory /> View Recordings
             </button>
           </div>
         </div>
