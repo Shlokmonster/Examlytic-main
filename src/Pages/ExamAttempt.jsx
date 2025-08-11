@@ -917,6 +917,7 @@ const connectToAdmin = (peer) => {
         videoRef.current.muted = true;
         videoRef.current.playsInline = true;
         videoRef.current.setAttribute('playsinline', '');
+        videoRef.current.style.transform = 'scaleX(-1)'; // Mirror the video
         
         // Start detection when video is playing
         const onPlaying = () => {
