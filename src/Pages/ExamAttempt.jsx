@@ -1,4 +1,5 @@
-import { useEffect, useState, useRef, useCallback } from "react"
+import { useEffect, useState, useRef, useCallback } from "react";
+import { Box, TextField } from '@mui/material';
 import { useParams, useNavigate } from "react-router-dom"
 import supabase from "../SupabaseClient"
 import Navbar from "../Components/common/Navbar"
@@ -2027,13 +2028,17 @@ const connectToAdmin = (peer) => {
                   })}
                 </div>
               ) : (
-                <textarea
-                  className="text-answer-box"
-                  value={answers[q.id] || ''}
-                  onChange={e => handleOptionChange(q.id, e.target.value)}
-                  placeholder="Type your answer here..."
-                  rows={3}
-                />
+                <Box sx={{ width: '100%', mt: 1, mb: 1 }}>
+                  <TextField
+                    fullWidth
+                    multiline
+                    rows={3}
+                    variant="outlined"
+                    label="Type your answer here..."
+                    value={answers[q.id] || ''}
+                    onChange={e => handleOptionChange(q.id, e.target.value)}
+                  />
+                </Box>
               )}
             </div>
           ))}

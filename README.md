@@ -5,7 +5,7 @@ Examlytic is a full-stack web application that enables online exams with real-ti
 ---
 
 ##  System Architecture
-![System Design](./systemdesign.png)
+![System Design](./src/assets/SystemDesign.png)
 ### Architecture Overview
 
 - **Frontend**: React + Lottie + CSS
