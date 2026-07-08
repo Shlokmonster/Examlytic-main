@@ -11,6 +11,7 @@ export const generateExamQuestions = async (topic, numQuestions = 5) => {
     const prompt = `Generate exactly ${numQuestions} exam questions about the topic "${topic}" in a valid JSON object containing a "questions" key. 
     The "questions" key must map to an array of questions.
     
+    
     Supported question types: "mcq" and "answerable".
     
     1. For MCQ ("type": "mcq") questions:

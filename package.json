@@ -12,6 +12,7 @@
   "dependencies": {
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
+    "@livekit/components-react": "^2.9.21",
     "@lottiefiles/react-lottie-player": "^3.6.0",
     "@mediapipe/camera_utils": "^0.3.1675466862",
     "@mediapipe/face_detection": "^0.4.1646425229",
@@ -31,6 +32,7 @@
     "cloudinary": "^2.7.0",
     "html2canvas": "^1.4.1",
     "jspdf": "^3.0.1",
+    "livekit-client": "^2.20.1",
     "peerjs": "^1.5.5",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

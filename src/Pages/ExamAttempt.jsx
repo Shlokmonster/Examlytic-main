@@ -3,7 +3,7 @@ import { Box, TextField } from '@mui/material';
 import { useParams, useNavigate } from "react-router-dom"
 import supabase from "../SupabaseClient"
 import Navbar from "../Components/common/Navbar"
-import Peer from 'peerjs';
+import { Room } from 'livekit-client';
 import { FaVideo, FaVideoSlash, FaDesktop, FaExclamationTriangle, FaUser, FaFlag, FaRegFlag, FaLock, FaChevronLeft, FaChevronRight, FaCalculator, FaCheckCircle, FaInfoCircle } from 'react-icons/fa';
 import { useReactMediaRecorder } from 'react-media-recorder';
 import { FilesetResolver, FaceDetector } from '@mediapipe/tasks-vision';
@@ -68,7 +68,7 @@ export default function ExamAttempt() {
   const [studentId, setStudentId] = useState(null)
   const lastLogTime = useRef(Date.now())
   const logCooldown = 5000 // 5 seconds cooldown between logs for the same event
-  const peerRef = useRef(null)
+  const roomRef = useRef(null)
   const streamRef = useRef(null)
   const [peerId] = useState(`student-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`)
   const adminPeerId = 'admin-dashboard';
@@ -456,9 +456,9 @@ export default function ExamAttempt() {
       streamRef.current = null;
     }
     
-    if (peerRef.current) {
-      peerRef.current.destroy();
-      peerRef.current = null;
+    if (roomRef.current) {
+      roomRef.current.disconnect();
+      roomRef.current = null;
     }
     
     if (faceDetector) {
@@ -585,7 +585,7 @@ export default function ExamAttempt() {
     }
   }, [status, recordingError]);
 
-  // Initialize PeerJS connection with reconnection logic
+  // Initialize LiveKit connection with reconnection logic
   const setupPeerConnection = useCallback(async () => {
     if (reconnectAttempts.current >= maxReconnectAttempts) {
       setConnectionStatus('Failed to connect after multiple attempts. Please refresh the page.');
@@ -593,289 +593,106 @@ export default function ExamAttempt() {
     }
 
     try {
-      const peer = new Peer(peerId, {
-        host: '0.peerjs.com',
-        port: 443,
-        path: '/',
-        secure: true,
-        debug: 3,
-        config: {
-          iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' }
-          ]
-        }
+      setConnectionStatus('Requesting streaming credentials...');
+      
+      const { data: { user } } = await supabase.auth.getUser();
+      const resolvedStudentName = user?.user_metadata?.full_name || user?.email || 'Student';
+      
+      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/rapid-task`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`
+        },
+        body: JSON.stringify({
+          roomName: `exam-${examId}`,
+          participantName: `student-${studentId || 'unknown'}-${Date.now()}`,
+          studentName: resolvedStudentName,
+          isPublisher: true
+        })
       });
 
-      peer.on('open', (id) => {
-        console.log('Connected to PeerJS server with ID:', id);
-        setConnectionStatus('Connected to server');
-        reconnectAttempts.current = 0; // Reset reconnect attempts
-        connectToAdmin(peer);
-      });
+      if (!response.ok) {
+        throw new Error('Failed to get LiveKit token from server');
+      }
 
-      peer.on('error', (err) => {
-        console.error('PeerJS error:', err);
-        if (err.type === 'unavailable-id') {
-          // If ID is taken, we'll get a new ID in the next attempt
-          setConnectionStatus('ID conflict. Reconnecting...');
-        } else {
-          setConnectionStatus(`Connection error: ${err.message}. Retrying...`);
-        }
+      const { token, url } = await response.json();
+
+      setConnectionStatus('Connecting to streaming server...');
+      const room = new Room();
+
+      room.on('disconnected', () => {
+        console.log('Disconnected from LiveKit server. Reconnecting...');
+        setConnectionStatus('Disconnected. Reconnecting...');
         reconnectAttempts.current++;
         setTimeout(setupPeerConnection, 2000);
       });
 
-      peer.on('disconnected', () => {
-        console.log('Disconnected from server. Reconnecting...');
-        setConnectionStatus('Disconnected. Reconnecting...');
-        peer.reconnect();
-      });
+      await room.connect(url || 'wss://0.peerjs.com', token);
+      console.log('Connected to LiveKit room:', room.name);
+      setConnectionStatus('Connected to streaming server');
+      reconnectAttempts.current = 0;
+      roomRef.current = room;
 
-      peerRef.current = peer;
+      // Now start screen share and publish track
+      try {
+        const constraints = {
+          video: {
+            displaySurface: 'monitor',
+            logicalSurface: true,
+            width: { ideal: 1920, max: 1920 },
+            height: { ideal: 1080, max: 1080 },
+            frameRate: { ideal: 15, max: 30 }
+          },
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            sampleRate: 44100
+          },
+          systemAudio: 'include',
+          selfBrowserSurface: 'exclude',
+          surfaceSwitching: 'include',
+          preferCurrentTab: false
+        };
+
+        const stream = await navigator.mediaDevices.getDisplayMedia(constraints).catch(err => {
+          console.warn('Error with system audio, trying without:', err);
+          return navigator.mediaDevices.getDisplayMedia({
+            video: true,
+            audio: false
+          });
+        });
+
+        streamRef.current = stream;
+        setIsScreenSharing(true);
+        setConnectionStatus('Screen sharing active');
+
+        const videoTrack = stream.getVideoTracks()[0];
+        if (videoTrack) {
+          await room.localParticipant.publishTrack(videoTrack, { name: 'screen-share' });
+        }
+
+        // Handle track ended (user stops sharing)
+        videoTrack.onended = () => {
+          console.log('Screen sharing track ended');
+          setIsScreenSharing(false);
+          setConnectionStatus('Screen sharing ended by user');
+          stopAllTracks(stream);
+        };
+
+      } catch (err) {
+        console.error('Error starting screen share:', err);
+        setConnectionStatus('Screen sharing permission denied or failed');
+      }
+
     } catch (error) {
-      console.error('Error initializing PeerJS:', error);
+      console.error('Error initializing LiveKit:', error);
       setConnectionStatus(`Error: ${error.message}. Retrying...`);
       reconnectAttempts.current++;
       setTimeout(setupPeerConnection, 2000);
     }
-  }, [peerId]);
-
-  // Start screen share and call admin
-const startScreenShareAndCallAdmin = async (peer) => {
-  try {
-    const stream = await navigator.mediaDevices.getDisplayMedia({
-      video: {
-        displaySurface: 'monitor',
-        logicalSurface: true,
-        width: { ideal: 1920, max: 1920 },
-        height: { ideal: 1080, max: 1080 },
-        frameRate: { ideal: 15, max: 30 }
-      },
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        sampleRate: 44100
-      }
-    });
-    streamRef.current = stream;
-    setIsScreenSharing(true);
-    setConnectionStatus('Screen sharing active');
-    // Call the admin with the screen stream
-    const call = peer.call(adminPeerId, stream, { metadata: { type: 'screen-share' } });
-    call.on('close', () => {
-      setIsScreenSharing(false);
-      setConnectionStatus('Screen sharing ended by admin');
-    });
-    call.on('error', (err) => {
-      setIsScreenSharing(false);
-      setConnectionStatus('Screen sharing error');
-    });
-  } catch (err) {
-    setConnectionStatus('Screen sharing permission denied or failed');
-  }
-};
-
-// Connect to admin dashboard
-const connectToAdmin = (peer) => {
-  try {
-    console.log('Connecting to admin...');
-    setConnectionStatus('Connecting to admin...');
-    
-    const conn = peer.connect(adminPeerId, {
-      reliable: true,
-      serialization: 'json'
-    });
-
-    conn.on('open', () => {
-      console.log('Connected to admin dashboard');
-      setConnectionStatus('Connected to admin');
-      
-      // Send student info to admin
-      conn.send({
-        type: 'student-info',
-        studentId: peer.id,
-        examId: examId,
-        studentName: 'Student' // Replace with actual student name
-      });
-
-      // Set up call handling
-      setupCallHandling(peer);
-      startScreenShareAndCallAdmin(peer);
-    });
-
-    conn.on('error', (err) => {
-      console.error('Connection error:', err);
-      setConnectionStatus('Connection error. Retrying...');
-      setTimeout(() => connectToAdmin(peer), 2000);
-    });
-
-    conn.on('close', () => {
-      console.log('Connection to admin closed');
-      setConnectionStatus('Disconnected from admin. Reconnecting...');
-      setTimeout(() => connectToAdmin(peer), 2000);
-    });
-  } catch (err) {
-    console.error('Error connecting to admin:', err);
-    setConnectionStatus('Error connecting to admin. Retrying...');
-    setTimeout(() => connectToAdmin(peer), 2000);
-  }
-};
-
-  // Handle incoming calls from admin
-  const setupCallHandling = (peer) => {
-    console.log('Setting up call handling...');
-    
-    peer.on('call', async (call) => {
-      console.log('Received call from admin:', call.metadata);
-      setConnectionStatus('Admin requested screen sharing...');
-      
-      try {
-        // Stop any existing stream
-        if (streamRef.current) {
-          stopAllTracks(streamRef.current);
-          streamRef.current = null;
-        }
-        
-        // Request screen sharing with specific constraints
-        let stream;
-        try {
-          // First try with system audio if available
-          const constraints = {
-            video: {
-              displaySurface: 'monitor',
-              logicalSurface: true,
-              width: { ideal: 1920, max: 1920 },
-              height: { ideal: 1080, max: 1080 },
-              frameRate: { ideal: 15, max: 30 }
-            },
-            audio: {
-              echoCancellation: true,
-              noiseSuppression: true,
-              sampleRate: 44100
-            },
-            systemAudio: 'include', // Try to include system audio if possible
-            selfBrowserSurface: 'exclude', // Don't show the current tab as an option
-            surfaceSwitching: 'include', // Allow switching between screens/windows
-            preferCurrentTab: false // Don't default to the current tab
-          };
-          
-          console.log('Requesting screen sharing with constraints:', JSON.stringify(constraints, null, 2));
-          
-          stream = await navigator.mediaDevices.getDisplayMedia(constraints).catch(err => {
-            console.warn('Error with system audio, trying without:', err);
-            // Fallback to simpler constraints if the first attempt fails
-            return navigator.mediaDevices.getDisplayMedia({
-              video: true,
-              audio: false
-            });
-          });
-          
-          // Log the actual constraints that were applied
-          const videoTrack = stream.getVideoTracks()[0];
-          if (videoTrack) {
-            console.log('Using video settings:', {
-              width: videoTrack.getSettings().width,
-              height: videoTrack.getSettings().height,
-              frameRate: videoTrack.getSettings().frameRate,
-              deviceId: videoTrack.getSettings().deviceId,
-              displaySurface: videoTrack.getSettings().displaySurface
-            });
-          }
-          
-        } catch (err) {
-          console.error('Error getting display media:', err);
-          setConnectionStatus('Screen sharing permission denied or failed');
-          call.close();
-          return;
-        }
-        
-        if (!stream) {
-          console.error('Failed to get display media');
-          setConnectionStatus('Failed to access screen');
-          call.close();
-          return;
-        }
-        // ADD THIS CHECK
-        const videoTracks = stream.getVideoTracks();
-        if (!videoTracks.length || videoTracks[0].readyState !== 'live') {
-          console.warn('Screen stream is not live or has no video tracks.');
-          setConnectionStatus('Screen stream is not live or has no video tracks.');
-          stopAllTracks(stream);
-          call.close();
-          return;
-        }
-        streamRef.current = stream;
-        setIsScreenSharing(true);
-        setConnectionStatus('Screen sharing active');
-        
-        // Answer the call with our stream
-        console.log('Answering call with stream:', stream.id);
-        try {
-          call.answer(stream);
-          
-          // Log stream information
-          console.log('Stream tracks:', stream.getTracks().map(t => ({
-            kind: t.kind,
-            enabled: t.enabled,
-            readyState: t.readyState,
-            muted: t.muted,
-            settings: t.getSettings ? t.getSettings() : {}
-          })));
-          
-          // Set up call event handlers
-          call.on('stream', (remoteStream) => {
-            console.log('Received remote stream from admin');
-          });
-          
-          call.on('close', () => {
-            console.log('Call ended by admin');
-            setIsScreenSharing(false);
-            setConnectionStatus('Screen sharing ended by admin');
-            stopAllTracks(stream);
-          });
-          
-          call.on('error', (err) => {
-            console.error('Call error:', err);
-            setIsScreenSharing(false);
-            setConnectionStatus('Screen sharing error');
-            stopAllTracks(stream);
-          });
-
-          // Handle track ended (user stops sharing)
-          stream.getTracks().forEach(track => {
-            const onTrackEnded = () => {
-              console.log('Screen sharing track ended:', track.kind);
-              track.onended = null; // Prevent multiple calls
-              setIsScreenSharing(false);
-              setConnectionStatus('Screen sharing ended by user');
-              stopAllTracks(stream);
-            };
-            track.onended = onTrackEnded;
-          });
-          
-        } catch (err) {
-          console.error('Error answering call:', err);
-          setConnectionStatus('Failed to start screen sharing');
-          stopAllTracks(stream);
-          call.close();
-        }
-        
-      } catch (err) {
-        console.error('Error in call handling:', err);
-        setConnectionStatus('Screen sharing error');
-        if (streamRef.current) {
-          stopAllTracks(streamRef.current);
-          streamRef.current = null;
-        }
-        try {
-          call.close();
-        } catch (e) {
-          console.error('Error closing call:', e);
-        }
-      }
-    });
-  };
+  }, [examId, studentId]);
 
   // Stop all tracks in a stream
   const stopAllTracks = (stream) => {
@@ -1136,7 +953,7 @@ const connectToAdmin = (peer) => {
     
     // Set up periodic status updates
     const statusInterval = setInterval(() => {
-      if (peerRef.current && !peerRef.current.disconnected) {
+      if (roomRef.current && roomRef.current.state === 'connected') {
         setConnectionStatus(prev => {
           if (!prev.includes('Connected')) {
             return 'Connected to admin';
@@ -1160,8 +977,8 @@ const connectToAdmin = (peer) => {
         stopRecording();
       }
       // Clean up peer connection
-      if (peerRef.current && !peerRef.current.destroyed) {
-        peerRef.current.destroy();
+      if (roomRef.current) {
+        roomRef.current.disconnect();
       }
     }
   }, [examId])

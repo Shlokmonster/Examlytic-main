@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import Peer from 'peerjs';
+import { useParams } from 'react-router-dom';
+import { Room, RoomEvent } from 'livekit-client';
 import { FaVolumeUp, FaVolumeMute, FaExpand, FaCompress, FaUser, FaExclamationTriangle, FaInfoCircle, FaDesktop } from 'react-icons/fa';
 import supabase from '../SupabaseClient';
 
-const LiveMonitoring = () => {
+const LiveMonitoring = ({ examId: propExamId }) => {
+  const { examId: routeExamId } = useParams();
+  const examId = propExamId || routeExamId;
   const [students, setStudents] = useState([]);
   const [isMuted, setIsMuted] = useState({});
   const [fullscreen, setFullscreen] = useState(null);
@@ -16,7 +19,7 @@ const LiveMonitoring = () => {
   const [selectedStudent, setSelectedStudent] = useState(null);
   const mediaRecorders = useRef({});
   
-  const peerRef = useRef(null);
+  const roomRef = useRef(null);
   const connections = useRef({});
   const videoRefs = useRef({});
   const mediaStreams = useRef({});
@@ -205,14 +208,15 @@ const LiveMonitoring = () => {
     });
     videoRefs.current = {};
 
-    // Destroy peer
-    if (peerRef.current && !peerRef.current.destroyed) {
-      peerRef.current.destroy();
+    // Disconnect LiveKit room
+    if (roomRef.current) {
+      roomRef.current.disconnect();
+      roomRef.current = null;
     }
   }, []);
 
   // Handle incoming streams
-  const handleIncomingStream = useCallback((studentId, stream) => {
+  const handleIncomingStream = useCallback((studentId, stream, studentName = 'Student') => {
     console.log('Received stream for student:', studentId, stream);
     
     if (!stream || !stream.getTracks || stream.getTracks().length === 0) {
@@ -224,9 +228,22 @@ const LiveMonitoring = () => {
     mediaStreams.current[studentId] = stream;
 
     // Update student state
-    setStudents(prev => 
-      prev.map(s => s.id === studentId ? { ...s, stream, connected: true } : s)
-    );
+    setStudents(prev => {
+      const exists = prev.some(s => s.id === studentId);
+      if (exists) {
+        return prev.map(s => s.id === studentId ? { ...s, stream, name: studentName, connected: true } : s);
+      } else {
+        return [
+          ...prev,
+          {
+            id: studentId,
+            name: studentName,
+            stream,
+            connected: true
+          }
+        ];
+      }
+    });
 
     // Set up video element
     const setupVideo = () => {
@@ -301,172 +318,97 @@ const LiveMonitoring = () => {
     setStudents(prev => prev.filter(s => s.id !== studentId));
   }, []);
 
-  // Initialize PeerJS
+  // Initialize LiveKit connection
   useEffect(() => {
-    // Use a fixed admin ID with a random suffix to avoid conflicts
-    const adminId = 'admin-dashboard';
-    console.log('Initializing PeerJS with ID:', adminId);
-    
-    // Clean up any existing peer
-    if (peerRef.current) {
-      peerRef.current.destroy();
-    }
-    
-    const peer = new Peer(adminId, {
-      host: '0.peerjs.com',
-      port: 443,
-      path: '/',
-      secure: true,
-      debug: 3,
-      config: {
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' }
-        ]
-      }
-    });
+    let activeRoom = null;
 
-    peerRef.current = peer;
-    let reconnectTimer;
+    const setupLiveKit = async () => {
+      try {
+        setIsLoading(true);
+        setError(null);
 
-    // Peer event handlers
-    peer.on('open', (id) => {
-      console.log('PeerJS connected with ID:', id);
-      setIsLoading(false);
-      setError(null);
-      
-      // Clear any reconnect timer on successful connection
-      if (reconnectTimer) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-      }
-    });
+        // Fetch LiveKit subscriber token
+        const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/rapid-task`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`
+          },
+          body: JSON.stringify({
+            roomName: `exam-${examId}`,
+            participantName: `admin-${Date.now()}`,
+            isPublisher: false
+          })
+        });
 
-    peer.on('error', (err) => {
-      console.error('PeerJS error:', err);
-      setError(`Connection error: ${err.message}`);
-      
-      // Try to reconnect on error
-      if (!reconnectTimer) {
-        reconnectTimer = setTimeout(() => {
-          console.log('Attempting to reconnect...');
-          cleanup();
-          peerRef.current = null;
-          const newPeer = new Peer(adminId, {
-            host: '0.peerjs.com',
-            port: 443,
-            path: '/',
-            secure: true,
-            debug: 3,
-            config: {
-              iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' }
-              ]
-            }
-          });
-          peerRef.current = newPeer;
-        }, 2000);
-      }
-    });
-
-    // Handle incoming connections from students
-    const handleIncomingConnection = (conn) => {
-      console.log('New connection from student:', conn.peer);
-      
-      // Store the connection
-      connections.current[conn.peer] = conn;
-      
-      conn.on('open', () => {
-        console.log('Connection opened with student:', conn.peer);
-      });
-
-      conn.on('data', (data) => {
-        console.log('Received data from student:', data);
-        
-        if (data.type === 'student-info') {
-          setStudents(prev => {
-            const exists = prev.some(s => s.id === data.studentId);
-            return exists ? prev : [
-              ...prev, 
-              { 
-                id: data.studentId, 
-                name: data.studentName || 'Student', 
-                connected: true 
-              }
-            ];
-          });
-          
-          // Call the student to get their screen stream
-          console.log('Calling student for screen sharing:', conn.peer);
-          // REMOVE or COMMENT OUT this block:
-          // const call = peer.call(conn.peer, null, {
-          //   metadata: { type: 'screen-share' }
-          // });
-          // call.on('stream', ...);
-          // call.on('error', ...);
-          // connections.current[conn.peer] = call;
+        if (!response.ok) {
+          throw new Error('Failed to fetch streaming credentials');
         }
-      });
 
-      conn.on('close', () => {
-        console.log('Connection closed for student:', conn.peer);
-        cleanupOldConnection(conn.peer);
-      });
+        const { token, url } = await response.json();
 
-      conn.on('error', (err) => {
-        console.error('Connection error:', err);
-        cleanupOldConnection(conn.peer);
-      });
+        const room = new Room();
+        activeRoom = room;
+        roomRef.current = room;
+
+        room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
+          console.log('Subscribed to track:', track.sid, 'from participant:', participant.identity);
+          
+          if (track.kind === 'video') {
+            const mediaStream = new MediaStream([track.mediaStreamTrack]);
+            
+            // Extract student ID and details from identity or name
+            const identityParts = participant.identity.split('-');
+            const studentId = identityParts[1] || participant.identity;
+            const studentName = participant.name || 'Student';
+
+            handleIncomingStream(studentId, mediaStream, studentName);
+
+            // Start recording stream
+            startRecordingStream(mediaStream, studentId, {
+              examId,
+              studentName,
+              examName: 'Exam'
+            });
+          }
+        });
+
+        room.on(RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
+          const identityParts = participant.identity.split('-');
+          const studentId = identityParts[1] || participant.identity;
+          cleanupOldConnection(studentId);
+        });
+
+        room.on(RoomEvent.ParticipantDisconnected, (participant) => {
+          const identityParts = participant.identity.split('-');
+          const studentId = identityParts[1] || participant.identity;
+          cleanupOldConnection(studentId);
+        });
+
+        await room.connect(url || 'wss://0.peerjs.com', token);
+        console.log('Admin connected to LiveKit room:', room.name);
+        setIsLoading(false);
+
+      } catch (err) {
+        console.error('Error connecting to LiveKit room:', err);
+        setError(`Failed to connect to monitoring service: ${err.message}`);
+        setIsLoading(false);
+      }
     };
 
-    // Set up connection handler
-    peer.on('connection', handleIncomingConnection);
-    
-    // Handle incoming calls
-    peer.on('call', (call) => {
-      console.log('Incoming call from:', call.peer);
-      call.answer(); // Answer the call with no media stream
-      
-      call.on('stream', (remoteStream) => {
-        console.log('Received stream from student:', call.peer, remoteStream);
-        handleIncomingStream(call.peer, remoteStream);
-        
-        // Get exam and student info from the call metadata or connection data
-        const examId = call.metadata?.examId || 'unknown_exam';
-        const studentName = call.metadata?.studentName || 'Unknown Student';
-        const examName = call.metadata?.examName || 'Unknown Exam';
-        
-        startRecordingStream(remoteStream, call.peer, {
-          examId,
-          studentName,
-          examName
-        });
-      });
-      
-      call.on('close', () => {
-        console.log('Call ended with student:', call.peer);
-        cleanupOldConnection(call.peer);
-        
-        // Stop the recorder for this student
-        if (mediaRecorders.current[call.peer]) {
-          mediaRecorders.current[call.peer].stop();
-          delete mediaRecorders.current[call.peer];
-        }
-      });
-      
-      call.on('error', (err) => {
-        console.error('Call error:', err);
-        cleanupOldConnection(call.peer);
-      });
-    });
+    if (examId) {
+      setupLiveKit();
+    }
 
-    // Clean up on unmount
     return () => {
-      console.log('Cleaning up PeerJS...');
+      console.log('Cleaning up LiveKit connection...');
+      if (activeRoom) {
+        activeRoom.disconnect();
+      }
       cleanup();
     };
-  }, [cleanup, cleanupOldConnection, handleIncomingStream]);
+  }, [examId, cleanup, cleanupOldConnection, handleIncomingStream, startRecordingStream]);
 
   // Toggle mute for a student's stream
   const toggleMute = useCallback((studentId) => {
