@@ -16,6 +16,7 @@ import ExamRedirect from "./Pages/ExamRedirect";
 import Examcode from "./Pages/Examcode";
 import LiveMonitoring from "./Components/LiveMonitoring";
 import Diagnostics from "./Pages/Diagnostics";
+import Loader from "./Components/common/Loader";
 
 function App() {
   console.log('App component rendering...');
@@ -104,34 +105,7 @@ function App() {
 
   if (loading || roleLoading) {
     console.log('Showing loading state...');
-    return (
-      <div style={{
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        height: '100vh',
-        flexDirection: 'column',
-        gap: '20px'
-      }}>
-        <div style={{
-          width: '50px',
-          height: '50px',
-          border: '5px solid #f3f3f3',
-          borderTop: '5px solid #3498db',
-          borderRadius: '50%',
-          animation: 'spin 1s linear infinite'
-        }}></div>
-        <style>
-          {`
-            @keyframes spin {
-              0% { transform: rotate(0deg); }
-              100% { transform: rotate(360deg); }
-            }
-          `}
-        </style>
-        <p>Loading application...</p>
-      </div>
-    );
+    return <Loader fullPage message="Loading application..." />;
   }
   
   if (!user) {
@@ -141,18 +115,7 @@ function App() {
   
   if (!role) {
     console.log('No role available, showing role loading state');
-    return (
-      <div style={{
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        height: '100vh',
-        flexDirection: 'column'
-      }}>
-        <p>Loading your user role...</p>
-        <p>If this takes too long, please refresh the page.</p>
-      </div>
-    );
+    return <Loader fullPage message="Loading your user role... If this takes too long, please refresh the page." />;
   }
 
   return (

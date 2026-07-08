@@ -1,6 +1,8 @@
 import { useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 
+import Loader from '../Components/common/Loader';
+
 // Helper function to validate UUID
 const isValidUUID = (uuid) => {
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-5][0-9a-f]{3}-[089ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -27,10 +29,5 @@ export default function ExamRedirect() {
     }
   }, [id, navigate]);
 
-  return (
-    <div className="loading-container">
-      <div className="spinner"></div>
-      <p>Redirecting to exam...</p>
-    </div>
-  );
+  return <Loader fullPage message="Redirecting to exam..." />;
 }

@@ -4,12 +4,13 @@ import { useParams, useNavigate } from "react-router-dom"
 import supabase from "../SupabaseClient"
 import Navbar from "../Components/common/Navbar"
 import Peer from 'peerjs';
-import { FaVideo, FaVideoSlash, FaDesktop, FaExclamationTriangle } from 'react-icons/fa';
+import { FaVideo, FaVideoSlash, FaDesktop, FaExclamationTriangle, FaUser, FaFlag, FaRegFlag, FaLock, FaChevronLeft, FaChevronRight, FaCalculator, FaCheckCircle, FaInfoCircle } from 'react-icons/fa';
 import { useReactMediaRecorder } from 'react-media-recorder';
 import { FilesetResolver, FaceDetector } from '@mediapipe/tasks-vision';
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
 import * as tf from '@tensorflow/tfjs';
 import { uploadToCloudinary } from "../utils/cloudinary";
+import Loader from "../Components/common/Loader";
 
 // Function to log exam events
 const logExamEvent = async (examAttemptId, studentId, eventType, eventDetails = {}) => {
@@ -82,6 +83,14 @@ export default function ExamAttempt() {
   const [detectionRunning, setDetectionRunning] = useState(false);
   const [flags, setFlags] = useState([]);
   const [lastFlagTime, setLastFlagTime] = useState(0);
+  const [flaggedQuestions, setFlaggedQuestions] = useState({});
+  const [notes, setNotes] = useState('');
+  const [currentDateTime, setCurrentDateTime] = useState(new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentDateTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
   const flagCooldown = 30000; // 30 seconds cooldown between flags of same type
   const suspiciousObjects = ['cell phone', 'book', 'laptop', 'tv', 'remote', 'mouse', 'keyboard'];
   const lastObjectDetection = useRef(0);
@@ -1698,7 +1707,7 @@ const connectToAdmin = (peer) => {
   
   const currentQuestion = questions[currentQuestionIndex] || {}
 
-  if (isLoading) return <div>Loading...</div>;
+  if (isLoading) return <Loader fullPage message="Loading exam content..." />;
   if (error) return <div>{error}</div>;
 
   // Status indicator component with improved styling and animations
@@ -1794,438 +1803,861 @@ const connectToAdmin = (peer) => {
     );
   };
 
+  const formatDateTime = (date) => {
+    const yyyy = date.getFullYear();
+    const mm = String(date.getMonth() + 1).padStart(2, '0');
+    const dd = String(date.getDate()).padStart(2, '0');
+    const hh = String(date.getHours()).padStart(2, '0');
+    const min = String(date.getMinutes()).padStart(2, '0');
+    const sec = String(date.getSeconds()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd} ${hh}:${min}:${sec}`;
+  };
+
   return (
-    <div className="exam-ui-new">
-      {/* Status indicator */}
-      <StatusIndicator />
-      
-      {/* Hidden video element for webcam preview */}
-      <video 
-        ref={videoRef} 
-        autoPlay 
-        playsInline 
-        muted 
-        style={{ 
-          position: 'fixed',
-          width: '160px',
-          height: '120px',
-          bottom: '20px',
-          left: '20px',
-          borderRadius: '8px',
-          border: '2px solid #ddd',
-          zIndex: 1000,
-          transform: 'scaleX(-1)', // Mirror the video
-          opacity: 0.7,
-          display: 'none' // Hide but keep it in the DOM for streaming
-        }}
-      />
-      
+    <div className="exam-workspace-new">
+      {/* Dynamic styling injected inline */}
       <style>{`
-        body { background:white; }
-        .exam-ui-new { min-height: 90vh; background:white; }
-        .exam-container-new {
-          max-width: 1200px;
-          margin: 10px auto 0 auto;
-          background: #fff;
-          border-radius: 18px;
-          box-shadow: 0 4px 32px rgba(0,0,0,0.07);
-          padding: 36px 36px 48px 36px;
+        body {
+          background: #f8fafc !important;
+          margin: 0;
+          padding: 0;
+          font-family: 'Inter', -apple-system, sans-serif;
+          color: #1e293b;
+        }
+        .exam-workspace-new {
+          min-height: 100vh;
           display: flex;
           flex-direction: column;
-          align-items: center;
+          background: #f8fafc;
         }
-        .webcam-preview-new {
-          width: 900px;
-          height: 500px;
-          object-fit: cover;
-          border-radius: 16px;
-          box-shadow: 0 2px 16px rgba(0,0,0,0.10);
-          margin-bottom: 30px;
-        }
-        .top-controls-new {
-          width: 100%;
+        .exam-header-new {
           display: flex;
-          justify-content: space-around;
+          justify-content: space-between;
           align-items: center;
-          gap: 350px;
-          margin-bottom: 40px;
+          padding: 16px 40px;
+          background: #fff;
+          border-bottom: 1px solid #e2e8f0;
+          position: sticky;
+          top: 0;
+          z-index: 100;
         }
-        .exit-btn-new {
-          background: #f2f4f8;
-          border: 1.5px solid #e0e6ed;
+        .header-brand {
+          display: flex;
+          align-items: center;
+          gap: 15px;
+        }
+        .brand-name {
+          font-size: 22px;
+          font-weight: 800;
+          color: #3b82f6;
+          letter-spacing: -0.5px;
+        }
+        .brand-divider {
+          width: 1px;
+          height: 20px;
+          background: #cbd5e1;
+        }
+        .exam-title-display {
+          font-size: 13px;
+          font-weight: 700;
+          color: #64748b;
+          letter-spacing: 0.5px;
+          text-transform: uppercase;
+        }
+        .header-controls {
+          display: flex;
+          align-items: center;
+          gap: 16px;
+        }
+        .timer-pill {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          background: #f1f5f9;
+          color: #334155;
+          padding: 8px 16px;
           border-radius: 8px;
-          padding: 15px 25px;
+          font-family: monospace;
+          font-size: 16px;
+          font-weight: 700;
+          border: 1px solid #e2e8f0;
+        }
+        .finish-exam-btn {
+          background: #4f46e5;
+          color: #fff;
+          border: none;
+          border-radius: 8px;
+          padding: 10px 20px;
           font-weight: 600;
-          font-size: 15px;
+          font-size: 14px;
           cursor: pointer;
-          transition: background 0.2s;
+          transition: all 0.2s ease;
+          box-shadow: 0 2px 4px rgba(79, 70, 229, 0.15);
         }
-        .exit-btn-new:hover {
-          background:white;
+        .finish-exam-btn:hover {
+          background: #4338ca;
+          box-shadow: 0 4px 8px rgba(79, 70, 229, 0.25);
         }
-        .completed-badge-new {
-          background: #2b7cff;
-          color:black;
-          font-weight: 600;
-          border-radius: 8px;
-           padding: 15px 25px;
-          font-size: 15px;
+        .finish-exam-btn:disabled {
+          background: #94a3b8;
+          cursor: not-allowed;
+          box-shadow: none;
         }
-        .timer-section-new {
-          display: flex;
+        .exam-grid-new {
+          display: grid;
+          grid-template-columns: 280px 1fr 280px;
           gap: 24px;
-          margin: 0 0 32px 0;
-        }
-        .timer-box-new {
-          background: #f2f4f8;
-          border-radius: 12px;
-          padding: 20px 100px;
-          text-align: center;
-          min-width: 90px;
-        }
-        .timer-value-new {
-          font-size: 1.5rem;
-          font-weight: 700;
-          color:black;
-        }
-        .timer-label-new {
-          font-size: 1rem;
-          color: #7a869a;
-          margin-top: 2px;
-        }
-        .questions-scroll-new {
+          padding: 24px 40px;
+          max-width: 1440px;
+          margin: 0 auto;
           width: 100%;
-          max-height: 330px;
-          overflow-y: auto;
-          margin-top: 10px;
+          box-sizing: border-box;
+        }
+        .sidebar-column {
           display: flex;
           flex-direction: column;
-          gap: 18px;
-          
+          gap: 20px;
         }
-        .question-card-new {
+        .sidebar-card {
           background: #fff;
-          border-radius: 14px;
-          box-shadow: 0 2px 12px rgba(43,124,255,0.06);
-          padding: 24px 28px 18px 28px;
-          margin-bottom: 0;
+          border-radius: 12px;
+          border: 1px solid #e2e8f0;
+          padding: 20px;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.05);
         }
-        .question-title-new {
-          font-size: 1.18rem;
+        .sidebar-card-title {
+          font-size: 11px;
+          font-weight: 800;
+          color: #64748b;
+          letter-spacing: 1px;
+          text-transform: uppercase;
+          margin-bottom: 16px;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+        .webcam-card-new {
+          position: relative;
+          border-radius: 12px;
+          overflow: hidden;
+          background: #f1f5f9;
+          aspect-ratio: 4/3;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border: 1px solid #e2e8f0;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+        .webcam-video {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          transform: scaleX(-1);
+        }
+        .webcam-placeholder {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 8px;
+          color: #94a3b8;
+        }
+        .webcam-timestamp {
+          position: absolute;
+          bottom: 8px;
+          left: 8px;
+          background: rgba(15, 23, 42, 0.75);
+          color: #fff;
+          font-family: monospace;
+          font-size: 11px;
+          padding: 4px 8px;
+          border-radius: 4px;
+          backdrop-filter: blur(4px);
+          pointer-events: none;
+          z-index: 10;
+        }
+        .question-grid-new {
+          display: grid;
+          grid-template-columns: repeat(5, 1fr);
+          gap: 8px;
+          margin-bottom: 20px;
+        }
+        .q-num-btn {
+          width: 100%;
+          aspect-ratio: 1;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: #fff;
+          border: 1.5px solid #e2e8f0;
+          border-radius: 8px;
+          font-size: 14px;
+          font-weight: 600;
+          color: #334155;
+          cursor: pointer;
+          transition: all 0.2s ease;
+        }
+        .q-num-btn:hover {
+          border-color: #94a3b8;
+          background: #f8fafc;
+        }
+        .q-num-btn.active {
+          border-color: #4f46e5;
+          color: #4f46e5;
+          border-width: 2px;
           font-weight: 700;
+        }
+        .q-num-btn.answered {
+          background: #4f46e5;
+          border-color: #4f46e5;
+          color: #fff;
+        }
+        .q-num-btn.flagged {
+          background: #f5f3ff;
+          border-color: #c084fc;
+          color: #7e22ce;
+        }
+        .completion-container {
+          border-top: 1px solid #f1f5f9;
+          padding-top: 15px;
+        }
+        .completion-label-row {
+          display: flex;
+          justify-content: space-between;
+          font-size: 12px;
+          font-weight: 700;
+          color: #475569;
           margin-bottom: 6px;
         }
-        .question-text-new {
-          font-size: 1.08rem;
-          color: #222;
-          margin-bottom: 18px;
+        .completion-bar-bg {
+          width: 100%;
+          height: 6px;
+          background: #f1f5f9;
+          border-radius: 3px;
+          overflow: hidden;
         }
-        .options-new {
+        .completion-bar-fill {
+          height: 100%;
+          background: #4f46e5;
+          transition: width 0.3s ease;
+        }
+        .integrity-card-new {
+          background: #f0fdf4;
+          border: 1px solid #bbf7d0;
+          border-radius: 12px;
+          padding: 16px;
           display: flex;
           flex-direction: column;
-          gap: 13px;
+          gap: 6px;
         }
-        .option-new {
-          background: #f7fafd;
-          border: 1.5px solid #e0e6ed;
-          border-radius: 8px;
-          padding: 12px 18px;
-          font-size: 1.08rem;
+        .integrity-header {
           display: flex;
           align-items: center;
-          gap: 12px;
+          gap: 8px;
+          font-weight: 700;
+          font-size: 13px;
+          color: #166534;
+        }
+        .integrity-subtext {
+          font-size: 11px;
+          line-height: 1.4;
+          color: #15803d;
+        }
+        .question-workspace-card {
+          background: #fff;
+          border-radius: 12px;
+          border: 1px solid #e2e8f0;
+          padding: 30px;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+          display: flex;
+          flex-direction: column;
+          min-height: 480px;
+        }
+        .workspace-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 20px;
+        }
+        .question-index-pill {
+          background: #f5f3ff;
+          color: #7e22ce;
+          font-size: 12px;
+          font-weight: 700;
+          padding: 6px 14px;
+          border-radius: 100px;
+          border: 1px solid #e9d5ff;
+        }
+        .flag-review-toggle {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          font-size: 13px;
+          font-weight: 600;
+          color: #64748b;
+          background: none;
+          border: none;
           cursor: pointer;
-          transition: border 0.2s, background 0.2s;
+          transition: color 0.2s ease;
         }
-        .option-new input[type="radio"] {
-          accent-color: #2b7cff;
-          width: 18px;
-          height: 18px;
+        .flag-review-toggle:hover {
+          color: #334155;
         }
-        .option-new.selected {
-          border: 2px solid #2b7cff;
-          background: #eaf2ff;
+        .flag-review-toggle.flagged {
+          color: #7e22ce;
         }
-        .text-answer-box {
+        .question-body-text {
+          font-size: 18px;
+          font-weight: 700;
+          line-height: 1.45;
+          color: #0f172a;
+          margin-bottom: 24px;
+        }
+        .options-stack {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+          margin-bottom: 30px;
+          flex: 1;
+        }
+        .custom-option-card {
+          display: flex;
+          align-items: center;
+          gap: 14px;
+          background: #fff;
+          border: 1.5px solid #e2e8f0;
+          border-radius: 12px;
+          padding: 16px 20px;
+          cursor: pointer;
+          transition: all 0.2s ease;
+        }
+        .custom-option-card:hover {
+          border-color: #cbd5e1;
+          background: #f8fafc;
+        }
+        .custom-option-card.selected {
+          background: #f5f3ff;
+          border-color: #8b5cf6;
+        }
+        .custom-radio-circle {
+          width: 20px;
+          height: 20px;
+          border-radius: 50%;
+          border: 2px solid #cbd5e1;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          flex-shrink: 0;
+          transition: all 0.2s ease;
+        }
+        .custom-option-card.selected .custom-radio-circle {
+          border-color: #8b5cf6;
+        }
+        .custom-radio-inner {
+          width: 10px;
+          height: 10px;
+          border-radius: 50%;
+          background: #8b5cf6;
+        }
+        .option-text-display {
+          font-size: 15px;
+          font-weight: 500;
+          color: #334155;
+        }
+        .custom-option-card.selected .option-text-display {
+          color: #1e1b4b;
+          font-weight: 600;
+        }
+        .custom-textarea-answer {
           width: 100%;
-          min-height: 44px;
-          border-radius: 8px;
-          border: 1.5px solid #e0e6ed;
-          background: #f7fafd;
-          font-size: 1.08rem;
-          padding: 10px 14px;
-          margin-top: 8px;
-          margin-bottom: 8px;
+          min-height: 150px;
+          border-radius: 12px;
+          border: 1.5px solid #e2e8f0;
+          background: #fff;
+          font-size: 15px;
+          padding: 14px;
+          box-sizing: border-box;
           resize: vertical;
-          transition: border 0.2s;
+          transition: all 0.2s ease;
+          margin-bottom: 30px;
+          flex: 1;
         }
-        .text-answer-box:focus {
-          border: 2px solid #2b7cff;
+        .custom-textarea-answer:focus {
+          border-color: #8b5cf6;
           outline: none;
-          background: #eaf2ff;
+          box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.1);
         }
-        @media (max-width: 700px) {
-          .exam-container-new { padding: 12px; }
-          .webcam-preview-new { width: 100%; height: 180px; }
-          .timer-section-new { gap: 8px; }
-          .timer-box-new { padding: 10px 8px; min-width: 60px; }
+        .navigation-bar-new {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding-top: 20px;
+          border-top: 1px solid #f1f5f9;
+        }
+        .nav-text-btn {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          background: none;
+          border: none;
+          color: #475569;
+          font-size: 14px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: color 0.2s ease;
+        }
+        .nav-text-btn:hover {
+          color: #1e293b;
+        }
+        .nav-text-btn:disabled {
+          color: #cbd5e1;
+          cursor: not-allowed;
+        }
+        .next-question-btn {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          background: #4f46e5;
+          color: #fff;
+          border: none;
+          border-radius: 8px;
+          padding: 10px 20px;
+          font-weight: 600;
+          font-size: 14px;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          box-shadow: 0 2px 4px rgba(79, 70, 229, 0.15);
+        }
+        .next-question-btn:hover {
+          background: #4338ca;
+          box-shadow: 0 4px 8px rgba(79, 70, 229, 0.25);
+        }
+        .tool-box-inner {
+          background: #f8fafc;
+          border: 1px solid #e2e8f0;
+          border-radius: 8px;
+          padding: 12px;
+          margin-bottom: 16px;
+        }
+        .tool-box-inner:last-child {
+          margin-bottom: 0;
+        }
+        .tool-box-title {
+          font-size: 12px;
+          font-weight: 700;
+          color: #475569;
+          margin-bottom: 8px;
+        }
+        .tool-formula {
+          font-family: monospace;
+          font-size: 11px;
+          color: #2563eb;
+          background: #eff6ff;
+          padding: 8px 12px;
+          border-radius: 6px;
+          border: 1px solid #dbeafe;
+          overflow-x: auto;
+          white-space: nowrap;
+        }
+        .scratchpad-area {
+          width: 100%;
+          height: 90px;
+          border: 1px solid #cbd5e1;
+          border-radius: 6px;
+          background: #fff;
+          padding: 8px;
+          font-size: 12px;
+          box-sizing: border-box;
+          resize: none;
+          font-family: inherit;
+        }
+        .scratchpad-area:focus {
+          border-color: #8b5cf6;
+          outline: none;
+        }
+        .stats-list-new {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+        .stat-row-new {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          font-size: 13px;
+          font-weight: 600;
+          color: #475569;
+        }
+        .stat-label-with-dot {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+        .stat-dot {
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+        }
+        .stat-dot.red { background: #ef4444; }
+        .stat-dot.purple { background: #a855f7; }
+        .stat-dot.blue { background: #3b82f6; }
+        .stat-count-value {
+          font-weight: 700;
+          color: #1e293b;
+        }
+        .proctoring-alerts {
+          position: fixed;
+          top: 20px;
+          right: 20px;
+          z-index: 1000;
+          max-width: 320px;
+        }
+        .alert {
+          padding: 12px 16px;
+          margin-bottom: 10px;
+          border-radius: 8px;
+          display: flex;
+          align-items: center;
+          background: #fff3cd;
+          color: #856404;
+          box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+          border: 1px solid #ffeeba;
+          font-size: 13px;
+        }
+        .alert svg {
+          margin-right: 8px;
+          flex-shrink: 0;
+        }
+        .alert small {
+          opacity: 0.8;
+          margin-left: auto;
+          font-size: 11px;
+        }
+        @media (max-width: 992px) {
+          .exam-grid-new {
+            grid-template-columns: 1fr;
+            padding: 16px;
+          }
         }
       `}</style>
-      <Navbar />
-      <div className="exam-container-new">
-        {/* Proctoring Alerts */}
-        <div className="proctoring-alerts">
-          {flags.slice(-3).map((flag, index) => (
-            <div key={index} className="alert alert-warning">
-              <FaExclamationTriangle /> Suspicious activity detected: {flag.type.replace(/_/g, ' ').toLowerCase()}
-              <small> at {new Date(flag.timestamp).toLocaleTimeString()}</small>
+
+      {/* Floating status indicator for real-time proctor server connection */}
+      <StatusIndicator />
+
+      {/* Header bar */}
+      <header className="exam-header-new">
+        <div className="header-brand">
+          <span className="brand-name">Examlytic</span>
+          <div className="brand-divider" />
+          <span className="exam-title-display">
+            {exam ? `${exam.title} - ${exam.subject || 'MIDTERM'}` : 'EXAM WORKSPACE'}
+          </span>
+        </div>
+        <div className="header-controls">
+          <div className="timer-pill">
+            <span>⏱️</span>
+            <span>{hours !== '00' ? `${hours}:${minutes}:${seconds}` : `${minutes}:${seconds}`}</span>
+          </div>
+          <button 
+            onClick={handleSubmit} 
+            disabled={isSubmitting} 
+            className="finish-exam-btn"
+          >
+            Finish Exam
+          </button>
+        </div>
+      </header>
+
+      {/* Three Column Grid Workspace */}
+      <main className="exam-grid-new">
+        {/* Left Column */}
+        <section className="sidebar-column">
+          {/* Webcam Box */}
+          <div className="webcam-card-new">
+            <video ref={videoRef} autoPlay muted playsInline className="webcam-video" />
+            <div className="webcam-timestamp">
+              {formatDateTime(currentDateTime)}
             </div>
-          ))}
-        </div>
-        <div className="webcam-preview-wrapper">
-          <video ref={videoRef} autoPlay muted className="webcam-preview-new" />
-        </div>
-        <div className="top-controls-new">
-          <button onClick={handleSubmit} disabled={isSubmitting} className="exit-btn-new">Submit Test</button>
-          <span className="completed-badge-new">Completed: {Object.values(answers).filter(Boolean).length}/{questions.length}</span>
-        </div>
-        <div className="timer-section-new">
-          <div className="timer-box-new">
-            <div className="timer-value-new">{hours}</div>
-            <div className="timer-label-new">Hours</div>
           </div>
-          <div className="timer-box-new">
-            <div className="timer-value-new">{minutes}</div>
-            <div className="timer-label-new">Minutes</div>
+
+          {/* Exam Progress Card */}
+          <div className="sidebar-card">
+            <div className="sidebar-card-title">
+              Exam Progress
+            </div>
+            <div className="question-grid-new">
+              {questions.map((q, idx) => {
+                const isCurrent = idx === currentQuestionIndex;
+                const isAnswered = !!answers[q.id];
+                const isFlagged = !!flaggedQuestions[q.id];
+                
+                let btnClass = "q-num-btn";
+                if (isCurrent) btnClass += " active";
+                if (isAnswered) btnClass += " answered";
+                if (isFlagged) btnClass += " flagged";
+                
+                return (
+                  <button
+                    key={q.id}
+                    className={btnClass}
+                    onClick={() => setCurrentQuestionIndex(idx)}
+                  >
+                    {idx + 1}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="completion-container">
+              <div className="completion-label-row">
+                <span>Completion</span>
+                <span>
+                  {questions.length > 0 
+                    ? Math.round((questions.filter(q => answers[q.id]).length / questions.length) * 100) 
+                    : 0}%
+                </span>
+              </div>
+              <div className="completion-bar-bg">
+                <div 
+                  className="completion-bar-fill" 
+                  style={{ 
+                    width: `${questions.length > 0 
+                      ? Math.round((questions.filter(q => answers[q.id]).length / questions.length) * 100) 
+                      : 0}%` 
+                  }} 
+                />
+              </div>
+            </div>
           </div>
-          <div className="timer-box-new">
-            <div className="timer-value-new">{seconds}</div>
-            <div className="timer-label-new">Seconds</div>
+
+          {/* Integrity Shield Card */}
+          <div className="integrity-card-new">
+            <div className="integrity-header">
+              <FaLock />
+              <span>Integrity Shield Active</span>
+            </div>
+            <div className="integrity-subtext">
+              Your session is being monitored for professional certification compliance.
+            </div>
           </div>
-        </div>
-        <div className="questions-scroll-new">
-          {questions.map((q, idx) => (
-            <div className="question-card-new" key={q.id}>
-              <div className="question-title-new">Exam Question {idx + 1}</div>
-              <div className="question-text-new">{q.question_text}</div>
-              {q.type === 'mcq' ? (
-                <div className="options-new">
-                  {q.options?.map((opt, oidx) => {
-                    const letter = String.fromCharCode(65 + oidx);
-                    const selected = answers[q.id] === letter;
-                    return (
-                      <label key={oidx} className={`option-new${selected ? ' selected' : ''}`}>
-                        <input
-                          type="radio"
-                          name={q.id}
-                          value={letter}
-                          checked={selected}
-                          onChange={() => handleOptionChange(q.id, letter)}
-                        />
-                        {opt}
-                      </label>
-                    );
-                  })}
+        </section>
+
+        {/* Center Main Workspace */}
+        <section className="question-workspace-card">
+          <div className="workspace-header">
+            <div className="question-index-pill">
+              Question {currentQuestionIndex + 1} of {questions.length}
+            </div>
+            <button 
+              className={`flag-review-toggle ${flaggedQuestions[currentQuestion.id] ? 'flagged' : ''}`}
+              onClick={() => setFlaggedQuestions(prev => ({ 
+                ...prev, 
+                [currentQuestion.id]: !prev[currentQuestion.id] 
+              }))}
+            >
+              {flaggedQuestions[currentQuestion.id] ? <FaFlag /> : <FaRegFlag />}
+              <span>Flag for review</span>
+            </button>
+          </div>
+
+          {/* Question Text */}
+          <div className="question-body-text">
+            {currentQuestion.question_text}
+          </div>
+
+          {/* Dynamically Injected SVG Neural Network diagram for ANN questions */}
+          {(currentQuestion.question_text?.toLowerCase().includes('gradient') || 
+            currentQuestion.question_text?.toLowerCase().includes('neural') ||
+            (exam && exam.title?.toLowerCase().includes('neural'))) && (
+            <NeuralNetworkDiagram />
+          )}
+
+          {/* Question Input Selection */}
+          {currentQuestion.type === 'mcq' ? (
+            <div className="options-stack">
+              {currentQuestion.options?.map((opt, oidx) => {
+                const letter = String.fromCharCode(65 + oidx);
+                const selected = answers[currentQuestion.id] === letter;
+                return (
+                  <div 
+                    key={oidx} 
+                    className={`custom-option-card ${selected ? 'selected' : ''}`}
+                    onClick={() => handleOptionChange(currentQuestion.id, letter)}
+                  >
+                    <div className="custom-radio-circle">
+                      {selected && <div className="custom-radio-inner" />}
+                    </div>
+                    <span className="option-text-display">{opt}</span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <textarea
+              className="custom-textarea-answer"
+              placeholder="Type your notes or answer details here..."
+              value={answers[currentQuestion.id] || ''}
+              onChange={e => handleOptionChange(currentQuestion.id, e.target.value)}
+            />
+          )}
+
+          {/* Navigation Action Bar */}
+          <div className="navigation-bar-new">
+            <button 
+              className="nav-text-btn"
+              onClick={handlePreviousQuestion}
+              disabled={currentQuestionIndex === 0}
+            >
+              <FaChevronLeft />
+              <span>Previous</span>
+            </button>
+
+            <button 
+              className="nav-text-btn"
+              onClick={() => setFlaggedQuestions(prev => ({ 
+                ...prev, 
+                [currentQuestion.id]: !prev[currentQuestion.id] 
+              }))}
+            >
+              <FaRegFlag />
+              <span>Review Later</span>
+            </button>
+
+            <button 
+              className="next-question-btn"
+              onClick={handleNextQuestion}
+            >
+              <span>{currentQuestionIndex === questions.length - 1 ? 'Submit Exam' : 'Next Question'}</span>
+              <FaChevronRight />
+            </button>
+          </div>
+        </section>
+
+        {/* Right Column */}
+        <section className="sidebar-column">
+          {/* Reference Tools Card */}
+          <div className="sidebar-card">
+            <div className="sidebar-card-title">
+              <FaCalculator />
+              <span>Reference Tools</span>
+            </div>
+            
+            <div className="tool-box-inner">
+              <div className="tool-box-title">Equation Helper</div>
+              <div className="tool-formula">
+                ∂L/∂w = (∂L/∂y) * (∂y/∂z) * (∂z/∂w)
+              </div>
+            </div>
+
+            <div className="tool-box-inner">
+              <div className="tool-box-title">Scratchpad</div>
+              <textarea 
+                className="scratchpad-area"
+                placeholder="Type your notes here..."
+                value={notes}
+                onChange={e => setNotes(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {/* Quick Navigation Card */}
+          <div className="sidebar-card">
+            <div className="sidebar-card-title">
+              Quick Navigation
+            </div>
+            <div className="stats-list-new">
+              <div className="stat-row-new">
+                <div className="stat-label-with-dot">
+                  <div className="stat-dot red" />
+                  <span>Unanswered</span>
                 </div>
-              ) : (
-                <Box sx={{ width: '100%', mt: 1, mb: 1 }}>
-                  <TextField
-                    fullWidth
-                    multiline
-                    rows={3}
-                    variant="outlined"
-                    label="Type your answer here..."
-                    value={answers[q.id] || ''}
-                    onChange={e => handleOptionChange(q.id, e.target.value)}
-                  />
-                </Box>
-              )}
+                <span className="stat-count-value">
+                  {questions.filter(q => !answers[q.id]).length}
+                </span>
+              </div>
+              <div className="stat-row-new">
+                <div className="stat-label-with-dot">
+                  <div className="stat-dot purple" />
+                  <span>Flagged</span>
+                </div>
+                <span className="stat-count-value">
+                  {Object.values(flaggedQuestions).filter(Boolean).length}
+                </span>
+              </div>
+              <div className="stat-row-new">
+                <div className="stat-label-with-dot">
+                  <div className="stat-dot blue" />
+                  <span>Attempted</span>
+                </div>
+                <span className="stat-count-value">
+                  {questions.filter(q => answers[q.id]).length}
+                </span>
+              </div>
             </div>
-          ))}
-        </div>
+          </div>
+        </section>
+      </main>
+
+      {/* Proctoring Alerts Overlay */}
+      <div className="proctoring-alerts">
+        {flags.slice(-3).map((flag, index) => (
+          <div key={index} className="alert alert-warning">
+            <FaExclamationTriangle /> Suspicious activity detected: {flag.type.replace(/_/g, ' ').toLowerCase()}
+            <small> at {new Date(flag.timestamp).toLocaleTimeString()}</small>
+          </div>
+        ))}
       </div>
     </div>
   );
 }
-// Place this at the very top, before your component definition
-const examAttemptStyles = `
-  /* Proctoring alerts */
-  .proctoring-alerts {
-    position: fixed;
-    top: 20px;
-    right: 20px;
-    z-index: 1000;
-    max-width: 300px;
-  }
-  
-  .alert {
-    padding: 10px 15px;
-    margin-bottom: 10px;
-    border-radius: 4px;
-    display: flex;
-    align-items: center;
-    background: #fff3cd;
-    color: #856404;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-  }
-  
-  .alert svg {
-    margin-right: 8px;
-  }
-  
-  .alert small {
-    opacity: 0.8;
-    margin-left: auto;
-    font-size: 0.8em;
-  }
-.exam-ui {
-  background: #f9fbfd;
-  font-family: 'Segoe UI', sans-serif;
-  min-height: 100vh;
-  padding: 2rem 0;
-}
-.exam-container {
-  max-width: 900px;
-  margin: 0 auto;
-  background: white;
-  border-radius: 16px;
-  padding: 2rem;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.05);
-}
-.video-section {
-  position: relative;
-  border-radius: 12px;
-  overflow: hidden;
-  margin-bottom: 1.5rem;
-  width: 100%;
-  height: 260px;
-  background: #f3f6fa;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.webcam-preview {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  border-radius: 12px;
-}
-.top-controls {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 24px;
-}
-.exit-btn {
-  background: #f5f5f5;
-  border: none;
-  border-radius: 6px;
-  padding: 8px 18px;
-  font-weight: 500;
-  font-size: 15px;
-  cursor: pointer;
-  color: #222;
-  transition: background 0.2s;
-}
-.exit-btn:hover {
-  background: #e0e0e0;
-}
-.completed-badge {
-  background: #eaf4ff;
-  color: #1976d2;
-  border-radius: 8px;
-  padding: 6px 18px;
-  font-weight: 600;
-  font-size: 16px;
-}
-.timer-section {
-  display: flex;
-  justify-content: center;
-  gap: 32px;
-  margin-bottom: 32px;
-}
-.timer-box {
-  background: #f3f6fa;
-  border-radius: 12px;
-  padding: 18px 36px;
-  text-align: center;
-  min-width: 90px;
-}
-.timer-value {
-  font-size: 28px;
-  font-weight: 700;
-}
-.timer-label {
-  font-size: 15px;
-  color: #888;
-  margin-top: 4px;
-}
-.questions-scroll {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  max-height: 350px;
-  overflow-y: auto;
-  scroll-snap-type: y mandatory;
-  margin-bottom: 24px;
-}
-.question-card {
-  background: #fff;
-  border-radius: 18px;
-  box-shadow: 0 2px 12px rgba(0,0,0,0.03);
-  padding: 2rem 2.5rem;
-  margin-bottom: 24px;
-  width: 100%;
-  max-width: 420px;
-  scroll-snap-align: start;
-  border: 1.5px solid #f0f4f9;
-}
-.question-card h3 {
-  font-size: 19px;
-  font-weight: bold;
-  margin-bottom: 0.5rem;
-}
-.question-card p {
-  font-size: 16px;
-  margin-bottom: 1.5rem;
-}
-.options {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-  margin-top: 1rem;
-}
-.option {
-  background: #f0f4f9;
-  border: 2px solid transparent;
-  padding: 1rem;
-  border-radius: 10px;
-  font-size: 16px;
-  transition: all 0.2s ease;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-}
-.option input {
-  margin-right: 0.75rem;
-}
-.option:hover {
-  background: #dbe9f7;
-}
-.option input:checked + span {
-  font-weight: bold;
-}
-.status-bar {
-  margin-top: 24px;
-  color: #1976d2;
-  font-size: 15px;
-  text-align: left;
-}
-`;
 
-if (typeof document !== 'undefined' && !document.getElementById('exam-attempt-inline-style')) {
-  const style = document.createElement('style');
-  style.id = 'exam-attempt-inline-style';
-  style.innerHTML = examAttemptStyles;
-  document.head.appendChild(style);
-}
+// -------------------------------------------------------------
+// Helper sub-components placed below for clarity and organization
+// -------------------------------------------------------------
+
+const NeuralNetworkDiagram = () => (
+  <div className="neural-diagram-container" style={{ margin: '20px 0', padding: '15px', background: '#f8fafc', borderRadius: '12px', border: '1px solid #e2e8f0', display: 'flex', justifyContent: 'center' }}>
+    <svg width="100%" height="200" viewBox="0 0 600 200" style={{ maxWidth: '500px' }}>
+      {/* Connection Lines (Weights) */}
+      {[40, 80, 120, 160].map(y1 => 
+        [20, 60, 100, 140, 180].map(y2 => 
+          <line key={`l1-${y1}-${y2}`} x1="80" y1={y1} x2="220" y2={y2} stroke="#cbd5e1" strokeWidth="1" />
+        )
+      )}
+      {[20, 60, 100, 140, 180].map(y1 => 
+        [20, 60, 100, 140, 180].map(y2 => 
+          <line key={`l2-${y1}-${y2}`} x1="220" y1={y1} x2="360" y2={y2} stroke="#94a3b8" strokeWidth="1" />
+        )
+      )}
+      {[20, 60, 100, 140, 180].map(y1 => 
+        [70, 130].map(y2 => 
+          <line key={`l3-${y1}-${y2}`} x1="360" y1={y1} x2="500" y2={y2} stroke="#cbd5e1" strokeWidth="1" />
+        )
+      )}
+
+      {/* Nodes - Input Layer */}
+      {[40, 80, 120, 160].map((y, i) => (
+        <circle key={`n1-${i}`} cx="80" cy={y} r="10" fill="#fff" stroke="#3b82f6" strokeWidth="2.5" />
+      ))}
+      {/* Nodes - Hidden Layer 1 */}
+      {[20, 60, 100, 140, 180].map((y, i) => (
+        <circle key={`n2-${i}`} cx="220" cy={y} r="10" fill="#fff" stroke="#8b5cf6" strokeWidth="2.5" />
+      ))}
+      {/* Nodes - Hidden Layer 2 */}
+      {[20, 60, 100, 140, 180].map((y, i) => (
+        <circle key={`n3-${i}`} cx="360" cy={y} r="10" fill="#fff" stroke="#8b5cf6" strokeWidth="2.5" />
+      ))}
+      {/* Nodes - Output Layer */}
+      {[70, 130].map((y, i) => (
+        <circle key={`n4-${i}`} cx="500" cy={y} r="10" fill="#fff" stroke="#3b82f6" strokeWidth="2.5" />
+      ))}
+
+      {/* Labels */}
+      <text x="80" y="195" fill="#64748b" fontSize="9" textAnchor="middle" fontWeight="bold">Input Layer (X)</text>
+      <text x="290" y="195" fill="#64748b" fontSize="9" textAnchor="middle" fontWeight="bold">Hidden Layers (H1, H2)</text>
+      <text x="500" y="195" fill="#64748b" fontSize="9" textAnchor="middle" fontWeight="bold">Output Layer (Y)</text>
+
+      {/* Curves representing Backprop */}
+      <path d="M 230 30 Q 290 5 350 30" fill="none" stroke="#8b5cf6" strokeWidth="1" strokeDasharray="3,3" />
+      <text x="290" y="15" fill="#7e22ce" fontSize="8" textAnchor="middle" fontStyle="italic">Backpropagated Error</text>
+    </svg>
+  </div>
+);

@@ -1,96 +1,55 @@
-import { Link, useParams, useNavigate } from 'react-router-dom';
-import { useEffect, useState } from 'react';
-import { toast } from 'react-toastify';
-import supabase from '../SupabaseClient';
-import { FaLock, FaArrowLeft, FaCalendarAlt, FaClock, FaBook } from 'react-icons/fa';
+import { useNavigate } from 'react-router-dom';
+import { FaLock, FaThLarge, FaInfoCircle } from 'react-icons/fa';
+import '../ExamBlocked.css';
+import Navbar from '../Components/common/Navbar';
 
 function ExamBlocked() {
-  const { id } = useParams();
   const navigate = useNavigate();
-  const [exam, setExam] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
 
-  useEffect(() => {
-    const fetchExamDetails = async () => {
-      try {
-        const { data, error } = await supabase
-          .from('exams')
-          .select('*')
-          .eq('id', id)
-          .single();
-
-        if (error) throw error;
-        if (!data) throw new Error('Exam not found');
-        
-        setExam(data);
-      } catch (error) {
-        console.error('Error fetching exam details:', error);
-        toast.error(error.message || 'Error loading exam details');
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    if (id) {
-      fetchExamDetails();
-    } else {
-      setIsLoading(false);
-    }
-  }, [id]);
-
-  const handleGoBack = () => {
-    navigate(-1); // Go back to the previous page
+  const handleReturn = () => {
+    // Navigate back to the exam code entry page
+    navigate('/');
   };
 
-  if (isLoading) {
-    return (
-      <div className="loading-container">
-        <div className="spinner"></div>
-        <p>Loading exam details...</p>
-      </div>
-    );
-  }
-
   return (
-    <div className="exam-blocked-container">
-      <div className="blocked-content">
-        <div className="blocked-icon">
-          <FaLock size={48} />
+    <div className="exam-blocked-page">
+      {/* Top Navbar matching ExamIntro */}
+      <Navbar />
+
+      {/* Content Container */}
+      <div className="blocked-main-wrapper">
+        {/* Left Column - Information */}
+        <div className="blocked-info-col">
+          <div className="restriction-badge">
+            <span className="badge-dot"></span>
+            <span>SYSTEM RESTRICTION</span>
+          </div>
+          
+          <h1>Exam Session Locked</h1>
+          
+          <p className="restriction-description">
+            Your administrator has temporarily suspended access to this examination session. 
+            This may be due to a scheduled maintenance window, an institutional hold, or a proctoring update.
+          </p>
+          
+          <button className="btn-return-code" onClick={handleReturn}>
+            <FaThLarge className="btn-grid-icon" />
+            <span>Return to Examcode Page</span>
+          </button>
+          
+          <div className="refresh-hint">
+            <FaInfoCircle className="hint-info-icon" />
+            <span>Session will automatically refresh when unlocked by proctor.</span>
+          </div>
         </div>
-        <h2>Exam Locked</h2>
-        
-        {exam ? (
-          <div className="exam-details">
-            <h3>{exam.title}</h3>
-            <div className="detail-item">
-              <FaBook className="detail-icon" />
-              <span>{exam.subject || 'General'}</span>
-            </div>
-            <div className="detail-item">
-              <FaClock className="detail-icon" />
-              <span>{exam.duration_minutes} minutes</span>
-            </div>
-            <div className="detail-item">
-              <FaCalendarAlt className="detail-icon" />
-              <span>Created on {new Date(exam.created_at).toLocaleDateString()}</span>
+
+        {/* Right Column - Locked Graphic */}
+        <div className="blocked-graphic-col">
+          <div className="lock-outer-circle">
+            <div className="lock-inner-circle">
+              <FaLock className="lock-center-icon" />
             </div>
           </div>
-        ) : (
-          <p>Exam details not available.</p>
-        )}
-        
-        <div className="blocked-message">
-          <p>This exam is currently locked and cannot be accessed at this time.</p>
-          <p>Please contact your instructor or administrator if you believe this is an error.</p>
-        </div>
-        
-        <div className="action-buttons">
-          <button onClick={handleGoBack} className="btn btn-outline">
-            <FaArrowLeft /> Go Back
-          </button>
-          <Link to="/" className="btn btn-primary">
-            Return to Dashboard
-          </Link>
         </div>
       </div>
     </div>

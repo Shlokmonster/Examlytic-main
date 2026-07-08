@@ -1,0 +1,115 @@
+/* Unified Examlytic Loader Styling */
+
+.examlytic-loader-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1.5rem;
+    padding: 2.5rem;
+    box-sizing: border-box;
+}
+
+/* Full Page Mode */
+.examlytic-loader-wrapper.full-page {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #F8FAFC; /* Slate-blue background matching portal */
+    z-index: 9999;
+}
+
+/* Loader Base Container */
+.loader-container {
+    position: relative;
+    width: 64px;
+    height: 64px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Glowing Pulsing Outer Ring */
+.loader-glow-ring {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(99, 102, 241, 0.15) 0%, rgba(168, 85, 247, 0) 70%);
+    animation: pulseGlow 1.8s ease-in-out infinite;
+}
+
+/* Centered Rotating Double-Segment Arc */
+.loader-spinner-circle {
+    position: absolute;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    border: 3px solid transparent;
+    border-top-color: #6366F1;    /* Indigo segment */
+    border-bottom-color: #A855F7; /* Purple segment */
+    animation: spinLoader 1s cubic-bezier(0.68, -0.55, 0.27, 1.55) infinite;
+}
+
+/* Core Center Pulsing Dot */
+.loader-core-dot {
+    width: 10px;
+    height: 10px;
+    background-color: #2563EB; /* Royal blue */
+    border-radius: 50%;
+    box-shadow: 0 0 8px rgba(37, 99, 235, 0.6);
+    animation: pulseCore 1s ease-in-out infinite alternate;
+}
+
+/* Loading Status Text */
+.loader-status-message {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #475569; /* Slate grey */
+    margin: 0;
+    letter-spacing: 0.025em;
+    animation: fadeMessage 1.5s ease-in-out infinite alternate;
+}
+
+/* Animations */
+@keyframes spinLoader {
+    0% {
+        transform: rotate(0deg);
+    }
+    100% {
+        transform: rotate(360deg);
+    }
+}
+
+@keyframes pulseGlow {
+    0%, 100% {
+        transform: scale(0.9);
+        opacity: 0.5;
+    }
+    50% {
+        transform: scale(1.3);
+        opacity: 1;
+    }
+}
+
+@keyframes pulseCore {
+    0% {
+        transform: scale(0.85);
+        opacity: 0.8;
+    }
+    100% {
+        transform: scale(1.15);
+        opacity: 1;
+    }
+}
+
+@keyframes fadeMessage {
+    0% {
+        opacity: 0.65;
+    }
+    100% {
+        opacity: 1;
+    }
+}

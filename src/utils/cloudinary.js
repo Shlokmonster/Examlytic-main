@@ -6,9 +6,9 @@
 
 export const uploadToCloudinary = async (file, userId, folder = 'examlytic/recordings') => {
   try {
-    // Hardcoded values for testing - replace these with environment variables in production
-    const cloudName = 'dn2h5nryg';
-    const uploadPreset = 'examlytic_upload_preset';
+    // Dynamic configuration via environment variables with hardcoded fallbacks
+    const cloudName = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME || 'dn2h5nryg';
+    const uploadPreset = import.meta.env.VITE_CLOUDINARY_UPLOUD_PRESET || 'examlytic_upload_preset';
     
     console.log('Using Cloudinary config:', { cloudName, uploadPreset, folder });
 

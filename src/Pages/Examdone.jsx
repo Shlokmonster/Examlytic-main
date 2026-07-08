@@ -6,6 +6,7 @@ import Navbar from "../Components/common/Navbar";
 import supabase from "../SupabaseClient";
 import { FaCheckCircle, FaTimesCircle, FaDownload, FaArrowLeft } from 'react-icons/fa';
 import "../ExamDone.css";
+import Loader from "../Components/common/Loader";
 
 function ExamDone() {
   const location = useLocation();
@@ -489,17 +490,7 @@ function ExamDone() {
 */
 
   if (loading) {
-    return (
-      <div className="exam-done-container">
-        <Navbar />
-        <div className="container">
-          <div className="loading-container">
-            <div className="spinner"></div>
-            <p className="loading-text">Processing your exam results...</p>
-          </div>
-        </div>
-      </div>
-    );
+    return <Loader fullPage message="Processing your exam results..." />;
   }
 
   if (error) {

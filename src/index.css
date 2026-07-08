@@ -2515,13 +2515,55 @@ label {
 /*  LOGIN PAGE CSS */
 
 .login-page {
-  background-color: #ffffff;
-
-  display: fleX;
+  min-height: 100vh;
+  background-color: rgb(255, 253, 253);
+  display: flex;
   flex-direction: column;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
-.cont1 {
+/* Nav styles */
+.login-page .diagnostics-nav {
+  background-color: #ffffff;
+  border-bottom: 1px solid #E5E7EB;
+  padding: 0.85rem 2rem;
+  width: 100%;
+}
+
+.login-page .nav-container {
+  max-width: 1280px;
+  margin: 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.login-page .brand-logo {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 700;
+  font-size: 1.15rem;
+}
+
+.login-page .brand-passed {
+  color: #059669; /* Passed green logo */
+  letter-spacing: 0.05em;
+}
+
+.login-page .brand-divider {
+  color: #D1D5DB;
+  font-weight: 300;
+}
+
+.login-page .brand-subtext {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #4B5563;
+  letter-spacing: 0.1em;
+}
+
+.login-page .cont1 {
   flex-grow: 1;
   display: flex;
   flex-direction: column;
@@ -2529,60 +2571,163 @@ label {
   justify-content: center;
   padding: 40px 20px;
   text-align: center;
+  position: relative;
 }
 
+/* Secure access card */
+.login-card {
+  background: #ffffff;
+  border: 1px solid #e5e8f5;
+  border-radius: 28px;
+  padding: 48px 40px;
+  width: 100%;
+  max-width: 520px;
+  box-shadow: 0 24px 64px -12px rgba(165, 180, 252, 0.25), 0 1px 3px rgba(0, 0, 0, 0.02);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
 
-
-
-.head {
-  font-size: 42px;
+/* ISO Badge */
+.secure-badge {
+  background-color: #eef2f6;
+  color: #475569;
+  font-size: 11px;
   font-weight: 700;
-  color: #407ABF;
-  margin-bottom: 24px;
-}
-
-.ins {
-  font-size: 20px;
-  color: #444;
-  max-width: 800px;
-  margin: 0 auto 40px;
-  line-height: 1.8;
-}
-
-.login {
-  background-color: #407ABF;
-  color: white;
-  border: none;
-  padding: 18px 36px;
-  font-size: 18px;
-  font-weight: 600;
-  border-radius: 32px;
-  cursor: pointer;
+  padding: 6px 16px;
+  border-radius: 100px;
   display: inline-flex;
   align-items: center;
-  gap: 12px;
-  box-shadow: 0 6px 18px rgba(64, 122, 191, 0.3);
-  transition: background 0.3s ease;
+  gap: 6px;
+  letter-spacing: 0.05em;
+  margin-bottom: 28px;
+  text-transform: uppercase;
 }
 
-.login:hover {
-  background-color: #2f65a2;
-
+.secure-badge-check {
+  color: #2563eb;
+  font-weight: 900;
 }
 
-.google-icon {
-  width: 26px;
-  height: 26px;
-  background-color: white;
-  border-radius: 50%;
-  padding: 2px;
+/* Headings */
+.login-card h2 {
+  font-size: 32px;
+  font-weight: 700;
+  color: #0f172a;
+  margin: 0 0 16px 0;
+  line-height: 1.25;
 }
 
-.ins2 {
+.login-card p.description {
   font-size: 15px;
-  color: #777;
-  margin-top: 25px;
-  max-width: 600px;
+  color: #475569;
+  line-height: 1.6;
+  margin: 0 0 32px 0;
+  max-width: 400px;
+}
+
+/* Google Sign-in button */
+.google-signin-btn {
+  width: 100%;
+  background-color: #ffffff;
+  color: #0f172a;
+  border: 1px solid #e2e8f0;
+  border-radius: 100px;
+  padding: 16px 24px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
+  transition: all 0.2s ease;
+  margin-bottom: 32px;
+}
+
+.google-signin-btn:hover {
+  background-color: #f8fafc;
+  border-color: #cbd5e1;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.06);
+  transform: translateY(-1px);
+}
+
+.google-signin-btn img {
+  width: 20px;
+  height: 20px;
+}
+
+/* Encrypted Session info */
+.encrypted-note {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  color: #64748b;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  letter-spacing: 0.02em;
+}
+
+/* Sub-card AI Guardian text */
+.guardian-subtext {
+  font-size: 11px;
+  letter-spacing: 0.25em;
+  color: #94a3b8;
+  font-weight: 600;
+  margin-top: 32px;
+  text-transform: uppercase;
+}
+
+/* Bottom page footer */
+.login-footer {
+  width: 100%;
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: #94a3b8;
+  border-top: 1px solid rgba(226, 232, 240, 0.4);
+}
+
+.login-footer-left {
+  letter-spacing: 0.02em;
+}
+
+.login-footer-right {
+  display: flex;
+  gap: 24px;
+}
+
+.login-footer-right a {
+  color: #94a3b8;
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+.login-footer-right a:hover {
+  color: #64748b;
+}
+
+@media (max-width: 640px) {
+  .login-footer {
+    flex-direction: column;
+    gap: 12px;
+    text-align: center;
+  }
+  .login-footer-right {
+    gap: 16px;
+  }
+  .login-card {
+    padding: 36px 24px;
+  }
+  .login-card h2 {
+    font-size: 26px;
+  }
 }
 
 /*  EXAM INTRO PAGE */

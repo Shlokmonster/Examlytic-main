@@ -4,6 +4,7 @@ import supabase from "../SupabaseClient"
 import Navbar from "../Components/common/Navbar"
 import LiveMonitoring from "../Components/LiveMonitoring"
 import StudentRecordings from "../Components/StudentRecordings"
+import Loader from "../Components/common/Loader"
 
 import { toast } from "react-toastify"
 import { FaLock, FaUnlock, FaEye, FaTrash, FaEdit, FaLink, FaCopy, FaVideo, FaArrowLeft, FaHistory } from "react-icons/fa"
@@ -1195,24 +1196,7 @@ useEffect(() => {
 
   // Show loading state
   if (initialLoad) {
-    return (
-      <div className="admin-dashboard">
-        <Navbar />
-        <div className="admin-container" style={{ textAlign: 'center', padding: '40px' }}>
-          <div className="loading">
-            <h3>Loading Admin Dashboard...</h3>
-            <p>Please wait while we load your data</p>
-            <div className="spinner" style={{ margin: '20px auto', width: '40px', height: '40px', border: '4px solid #f3f3f3', borderTop: '4px solid #3498db', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></div>
-            <style>{`
-              @keyframes spin {
-                0% { transform: rotate(0deg); }
-                100% { transform: rotate(360deg); }
-              }
-            `}</style>
-          </div>
-        </div>
-      </div>
-    );
+    return <Loader fullPage message="Loading Admin Dashboard..." />;
   }
 
   // Fetch exam logs for a specific attempt
@@ -1390,10 +1374,7 @@ useEffect(() => {
           <h1 style={{ marginBottom: '20px' }}>Users and Exam Attempts</h1>
           
           {loading ? (
-            <div className="loading-container">
-              <div className="spinner"></div>
-              <p>Loading users...</p>
-            </div>
+            <Loader message="Loading users..." />
           ) : (
             <div className="users-grid">
               {users.map(user => (
@@ -2051,10 +2032,7 @@ useEffect(() => {
         )}
 
         {loading ? (
-          <div className="loading-container">
-            <div className="spinner"></div>
-            <p>Loading exams...</p>
-          </div>
+          <Loader message="Loading exams..." />
         ) : exams.length === 0 ? (
           <div className="no-exams">
             <div className="no-exams-icon">📝</div>

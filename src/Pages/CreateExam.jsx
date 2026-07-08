@@ -5,7 +5,7 @@ import Navbar from "../Components/common/Navbar"
 
 import { ToastContainer, toast } from 'react-toastify'
 import 'react-toastify/dist/ReactToastify.css'
-import { generateExamQuestions } from "../utils/geminiService"
+import { generateExamQuestions } from "../utils/groqService"
 
 // Sample JSON structure for reference
 const SAMPLE_QUESTIONS = [

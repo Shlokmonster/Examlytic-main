@@ -1,9 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Player } from "@lottiefiles/react-lottie-player";
 import supabase from "../SupabaseClient";
-import Navbar from "../Components/common/Navbar";
-import animationData from "../assets/student-login.json"; // Your Lottie file
+import Loader from "../Components/common/Loader";
 
 function Login() {
     const navigate = useNavigate();
@@ -89,41 +87,68 @@ function Login() {
 
     return (
         <div className="login-page">
-            <Navbar />
+            {/* Top Navigation Bar matching Diagnostics.jsx */}
+            <header className="diagnostics-nav">
+                <div className="nav-container">
+                    <div className="brand-logo">
+                        <span className="brand-passed">Examlytic</span>
+                        <span className="brand-divider">|</span>
+                        <span className="brand-subtext">SECURE PORTAL</span>
+                    </div>
+                </div>
+            </header>
+
             <div className="cont1">
                 {loading ? (
-                    <div className="spinner">Checking session...</div>
+                    <Loader message="Checking session..." />
                 ) : (
                     <>
-                        <Player
-                            autoplay
-                            loop
-                            src={animationData}
-                            style={{ height: "400px", width: "600px" }}
-                        />
+                        <div className="login-card">
+                            {/* ISO Badge */}
+                            <div className="secure-badge">
+                                <span className="secure-badge-check">✓</span> ISO 27001 Certified Secure
+                            </div>
 
-                        <div className="head">Welcome to Examlytic</div>
+                            <h2>Secure Institutional Access</h2>
 
-                        <div className="ins">
-                            Sign in with your university email to access your exam proctoring session. <br />
-                            Use your official <strong>@university.edu</strong> email for verification.
+                            <p className="description">
+                                Please authenticate using your university-managed workspace account to continue.
+                            </p>
+
+                            {/* Google Sign-in Button */}
+                            <button className="google-signin-btn" onClick={handleLogin}>
+                                <img
+                                    src="https://cdn-icons-png.flaticon.com/128/300/300221.png"
+                                    alt="Google Logo"
+                                />
+                                Continue with Google Workspace
+                            </button>
+
+                            {/* Encrypted Session Note */}
+                            <div className="encrypted-note">
+                                <span>🔒</span> End-to-end encrypted session
+                            </div>
                         </div>
 
-                        <button className="login" onClick={handleLogin}>
-                            <img
-                                src="https://cdn-icons-png.flaticon.com/128/720/720255.png"
-                                alt="Google"
-                                className="google-icon"
-                            />
-                            Login with University Email
-                        </button>
-
-                        <div className="ins2">
-                            If you encounter issues, contact your university's IT support.
+                        {/* Guardian note below the card */}
+                        <div className="guardian-subtext">
+                            Protected by Examlytic AI Guardian
                         </div>
                     </>
                 )}
             </div>
+
+            {/* Login Page Footer */}
+            <footer className="login-footer">
+                <div className="login-footer-left">
+                    © 2026 Examlytic. Single Sign-On Security v2.4.0
+                </div>
+                <div className="login-footer-right">
+                    <a href="#privacy">Privacy Shield</a>
+                    <a href="#terms">Institutional Terms</a>
+                    <a href="#support">Support</a>
+                </div>
+            </footer>
         </div>
     );
 }
