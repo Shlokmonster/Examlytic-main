@@ -62,14 +62,18 @@ export default function ExamAttempt() {
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(null)
   const videoRef = useRef()
-  const screenRecorderRef = useRef()
-  const screenChunks = useRef([])
+  const webcamStreamRef = useRef(null)
+  const screenStreamRef = useRef(null)
+  const manualMediaRecorderRef = useRef(null)
+  const recordedChunks = useRef([])
+  const isInitializingAttempt = useRef(false)
+  const onStopResolver = useRef(null)
+  const isDisposedRef = useRef(false)
   const [examAttemptId, setExamAttemptId] = useState(null)
   const [studentId, setStudentId] = useState(null)
   const lastLogTime = useRef(Date.now())
   const logCooldown = 5000 // 5 seconds cooldown between logs for the same event
   const roomRef = useRef(null)
-  const streamRef = useRef(null)
   const [peerId] = useState(`student-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`)
   const adminPeerId = 'admin-dashboard';
   const [connectionStatus, setConnectionStatus] = useState('Connecting...');
@@ -449,11 +453,17 @@ export default function ExamAttempt() {
   // Clean up resources
   const cleanupResources = useCallback(() => {
     console.log('Cleaning up resources...');
+    isDisposedRef.current = true;
     setDetectionRunning(false);
     
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-      streamRef.current = null;
+    if (webcamStreamRef.current) {
+      webcamStreamRef.current.getTracks().forEach(track => track.stop());
+      webcamStreamRef.current = null;
+    }
+
+    if (screenStreamRef.current) {
+      screenStreamRef.current.getTracks().forEach(track => track.stop());
+      screenStreamRef.current = null;
     }
     
     if (roomRef.current) {
@@ -478,7 +488,7 @@ export default function ExamAttempt() {
   const [isUploading, setIsUploading] = useState(false);
   const [recordingReady, setRecordingReady] = useState(false);
   const [uploadWarning, setUploadWarning] = useState(null);
-  
+
   const {
     status,
     startRecording,
@@ -523,25 +533,15 @@ export default function ExamAttempt() {
         // Update state with the new blob
         setRecordingBlob(blobCopy);
         setRecordingUrl(blobUrl);
+        setRecordingReady(true);
         
-        // Process the recording in the background
-        try {
-          const userResult = await supabase.auth.getUser();
-          const user = userResult?.data?.user;
-          
-          if (user) {
-            console.log('Starting background upload of recording...');
-            await processRecording(blobCopy, user.id);
-          } else {
-            console.warn('User not authenticated, skipping recording upload');
-          }
-        } catch (uploadError) {
-          console.error('Background upload failed:', uploadError);
-          // Don't throw, just log the error
+        // Resolve the submission resolver if active
+        if (onStopResolver.current) {
+          console.log('Resolving deferred stopResolver with blob Copy');
+          onStopResolver.current(blobCopy);
+          onStopResolver.current = null;
         }
         
-        // Mark as ready (for any components that might be waiting)
-        setRecordingReady(true);
         console.log('Recording processing completed');
       } catch (error) {
         console.error('Error in recording onStop handler:', error);
@@ -549,41 +549,25 @@ export default function ExamAttempt() {
       }
     }
   });
-  
-  // Log recording status changes and handle cleanup
-  useEffect(() => {
-    console.log('Recording status:', status);
-    if (recordingError) {
-      console.error('Recording error:', recordingError);
-      setError('Recording error: ' + recordingError.message);
-    }
-    
-    // Reset recording ready state when starting a new recording
-    if (status === 'recording') {
-      setRecordingReady(false);
-    }
-    
-    // Cleanup function
-    return () => {
-      if (mediaBlobUrl) {
-        URL.revokeObjectURL(mediaBlobUrl);
-      }
-    };
-  }, [status, recordingError, mediaBlobUrl]);
 
-  // Update isRecording state based on status
+  // Keep isRecording state synced with react-media-recorder status
   useEffect(() => {
     if (status === 'recording') {
       setIsRecording(true);
+      setRecordingReady(false);
     } else if (status === 'stopped' || status === 'idle') {
       setIsRecording(false);
     }
-    
-    if (recordingError) {
-      console.error('Recording error:', recordingError);
-      setError('Recording error: ' + recordingError);
-    }
-  }, [status, recordingError]);
+  }, [status]);
+
+  // Clean up recording URL on unmount
+  useEffect(() => {
+    return () => {
+      if (recordingUrl) {
+        URL.revokeObjectURL(recordingUrl);
+      }
+    };
+  }, [recordingUrl]);
 
   // Initialize LiveKit connection with reconnection logic
   const setupPeerConnection = useCallback(async () => {
@@ -623,10 +607,18 @@ export default function ExamAttempt() {
       const room = new Room();
 
       room.on('disconnected', () => {
+        if (isDisposedRef.current) {
+          console.log('Disconnected intentionally. Skipping reconnect.');
+          return;
+        }
         console.log('Disconnected from LiveKit server. Reconnecting...');
         setConnectionStatus('Disconnected. Reconnecting...');
         reconnectAttempts.current++;
-        setTimeout(setupPeerConnection, 2000);
+        setTimeout(() => {
+          if (!isDisposedRef.current) {
+            setupPeerConnection();
+          }
+        }, 2000);
       });
 
       await room.connect(url || 'wss://0.peerjs.com', token);
@@ -637,34 +629,36 @@ export default function ExamAttempt() {
 
       // Now start screen share and publish track
       try {
-        const constraints = {
-          video: {
-            displaySurface: 'monitor',
-            logicalSurface: true,
-            width: { ideal: 1920, max: 1920 },
-            height: { ideal: 1080, max: 1080 },
-            frameRate: { ideal: 15, max: 30 }
-          },
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            sampleRate: 44100
-          },
-          systemAudio: 'include',
-          selfBrowserSurface: 'exclude',
-          surfaceSwitching: 'include',
-          preferCurrentTab: false
-        };
+        let stream = screenStreamRef.current;
+        if (!stream || stream.getVideoTracks().length === 0 || !stream.active) {
+          const constraints = {
+            video: {
+              displaySurface: 'monitor',
+              logicalSurface: true,
+              width: { ideal: 1280, max: 1280 },
+              height: { ideal: 720, max: 720 },
+              frameRate: { ideal: 10, max: 15 }
+            },
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              sampleRate: 44100
+            }
+          };
 
-        const stream = await navigator.mediaDevices.getDisplayMedia(constraints).catch(err => {
-          console.warn('Error with system audio, trying without:', err);
-          return navigator.mediaDevices.getDisplayMedia({
-            video: true,
-            audio: false
+          stream = await navigator.mediaDevices.getDisplayMedia(constraints).catch(err => {
+            console.warn('Error with system audio, trying without:', err);
+            return navigator.mediaDevices.getDisplayMedia({
+              video: true,
+              audio: false
+            });
           });
-        });
 
-        streamRef.current = stream;
+          screenStreamRef.current = stream;
+        } else {
+          console.log('Reusing existing active screen share stream');
+        }
+
         setIsScreenSharing(true);
         setConnectionStatus('Screen sharing active');
 
@@ -707,9 +701,9 @@ export default function ExamAttempt() {
   // Set up webcam stream
   const setupWebcamStream = useCallback(async () => {
     // Skip if we already have a stream
-    if (streamRef.current) {
+    if (webcamStreamRef.current) {
       console.log('Webcam stream already exists');
-      return streamRef.current;
+      return webcamStreamRef.current;
     }
 
     try {
@@ -729,7 +723,7 @@ export default function ExamAttempt() {
       });
       
       // Store the stream reference
-      streamRef.current = stream;
+      webcamStreamRef.current = stream;
       
       // Setup video element
       if (videoRef.current) {
@@ -830,46 +824,15 @@ export default function ExamAttempt() {
       tf.dispose();
       
       // Stop all tracks in the stream
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => {
+      if (webcamStreamRef.current) {
+        webcamStreamRef.current.getTracks().forEach(track => {
           track.stop();
         });
-        streamRef.current = null;
+        webcamStreamRef.current = null;
       }
     };
   }, []); // Removed dependencies to prevent re-runs
 
-  useEffect(() => {
-    if (!examId) {
-      navigate('/exams')
-      return
-    }
-
-    const fetchExam = async () => {
-      try {
-        const { data, error } = await supabase
-          .from('exams')
-          .select('*')
-          .eq('id', examId)
-          .single()
-
-        if (error) throw error
-        setExam(data)
-        setQuestions(data.questions)
-        setTimeLeft(data.duration * 60)
-        setIsLoading(false)
-
-        // Start screen recording when exam loads
-        startRecording();
-      } catch (error) {
-        console.error('Error fetching exam:', error)
-        setError('Failed to load exam. Please try again.')
-        setIsLoading(false)
-      }
-    }
-
-    fetchExam()
-  }, [examId, navigate]);
 
   useEffect(() => {
     const loadExam = async () => {
@@ -884,6 +847,88 @@ export default function ExamAttempt() {
         if (examError) throw examError
 
         setExam(examData)
+        
+        if (isInitializingAttempt.current) {
+          console.log('Already initializing exam attempt, skipping concurrent loadExam call.');
+          return;
+        }
+        isInitializingAttempt.current = true;
+
+        // Authenticate student
+        const { data: { user }, error: userError } = await supabase.auth.getUser();
+        if (userError || !user) {
+          isInitializingAttempt.current = false;
+          throw new Error('User not authenticated. Please login again.');
+        }
+        setStudentId(user.id);
+
+        // Check for an active (unsubmitted) attempt for this student and exam
+        const { data: existingAttempt, error: attemptFetchError } = await supabase
+          .from('exam_attempts')
+          .select('id, answers')
+          .eq('exam_id', examId)
+          .eq('student_id', user.id)
+          .is('submitted_at', null)
+          .maybeSingle();
+
+        let activeAttemptId = null;
+        let loadedAnswers = {};
+
+        if (existingAttempt) {
+          console.log('Resuming active attempt:', existingAttempt.id);
+          activeAttemptId = existingAttempt.id;
+          setExamAttemptId(existingAttempt.id);
+          if (existingAttempt.answers) {
+            loadedAnswers = existingAttempt.answers;
+            setAnswers(existingAttempt.answers);
+          }
+          isInitializingAttempt.current = false;
+        } else {
+          // Double-check to prevent concurrent insertion race in Strict Mode
+          const { data: doubleCheckAttempt } = await supabase
+            .from('exam_attempts')
+            .select('id, answers')
+            .eq('exam_id', examId)
+            .eq('student_id', user.id)
+            .is('submitted_at', null)
+            .maybeSingle();
+
+          if (doubleCheckAttempt) {
+            console.log('Race condition prevented, resuming verified attempt:', doubleCheckAttempt.id);
+            activeAttemptId = doubleCheckAttempt.id;
+            setExamAttemptId(doubleCheckAttempt.id);
+            if (doubleCheckAttempt.answers) {
+              loadedAnswers = doubleCheckAttempt.answers;
+              setAnswers(doubleCheckAttempt.answers);
+            }
+          } else {
+            // Insert a new attempt record with submitted_at = null
+            const { data: newAttempt, error: insertError } = await supabase
+              .from('exam_attempts')
+              .insert({
+                exam_id: examId,
+                student_id: user.id,
+                answers: {},
+                score: 0,
+                submitted_at: null,
+                completed_at: null
+              })
+              .select()
+              .single();
+
+            if (insertError) {
+              console.error('Error starting exam attempt in DB:', insertError);
+              isInitializingAttempt.current = false;
+              throw new Error('Could not initialize exam session on the server. Please try again.');
+            } else {
+              console.log('Created new exam attempt in DB:', newAttempt.id);
+              activeAttemptId = newAttempt.id;
+              setExamAttemptId(newAttempt.id);
+            }
+          }
+          isInitializingAttempt.current = false;
+        }
+
         if (examData.questions && Array.isArray(examData.questions)) {
           const formattedQuestions = examData.questions.map((q, index) => ({
             id: q.id || `q-${index}`,
@@ -894,16 +939,21 @@ export default function ExamAttempt() {
             type: q.type || 'mcq',
           }))
           setQuestions(formattedQuestions)
+          
+          // Re-initialize answers if not loaded from active attempt
           const initialAnswers = {}
-          formattedQuestions.forEach(q => initialAnswers[q.id] = '')
+          formattedQuestions.forEach(q => {
+            initialAnswers[q.id] = loadedAnswers[q.id] !== undefined ? loadedAnswers[q.id] : '';
+          });
           setAnswers(initialAnswers)
+          
           setTimeLeft((examData.duration_minutes || 90) * 60)
         } else {
           setError('No questions found in this exam.')
         }
       } catch (err) {
         console.error(err)
-        setError('Failed to load exam.')
+        setError(err.message || 'Failed to load exam.')
       } finally {
         setIsLoading(false)
       }
@@ -941,8 +991,11 @@ export default function ExamAttempt() {
     // Initialize WebRTC and screen recording
     const init = async () => {
       try {
+        isDisposedRef.current = false;
         await setupWebcamStream();
         await setupPeerConnection();
+        console.log('Starting screen recording via react-media-recorder...');
+        startRecording();
       } catch (error) {
         console.error('Initialization error:', error);
         setConnectionStatus(`Error: ${error.message}`);
@@ -992,8 +1045,22 @@ export default function ExamAttempt() {
     return () => clearInterval(timer)
   }, [timeLeft])
 
-  const handleOptionChange = (questionId, selectedOption) => {
-    setAnswers(prev => ({ ...prev, [questionId]: selectedOption }))
+  const handleOptionChange = async (questionId, selectedOption) => {
+    setAnswers(prev => {
+      const updated = { ...prev, [questionId]: selectedOption };
+      
+      // Auto-save to Supabase
+      if (examAttemptId) {
+        supabase
+          .from('exam_attempts')
+          .update({ answers: updated })
+          .eq('id', examAttemptId)
+          .then(({ error }) => {
+            if (error) console.error('Error auto-saving answer:', error);
+          });
+      }
+      return updated;
+    });
   }
 
   const handleNextQuestion = () => {
@@ -1272,7 +1339,7 @@ export default function ExamAttempt() {
   };
 
   // Function to upload blob to Cloudinary
-  const uploadBlob = async (blob, userId) => {
+  const uploadBlob = async (blob, userId, onProgress) => {
     if (!blob) {
       console.warn('No recording blob available');
       return null;
@@ -1287,7 +1354,7 @@ export default function ExamAttempt() {
       const file = new File([blob], fileName, { type: 'video/webm' });
       
       // Upload to Cloudinary
-      const uploadResult = await uploadToCloudinary(file, userId, `examlytic/recordings/${examId}/${userId}`);
+      const uploadResult = await uploadToCloudinary(file, userId, `examlytic/recordings/${examId}/${userId}`, onProgress);
       
       console.log('Upload to Cloudinary successful:', uploadResult.url);
       return {
@@ -1403,7 +1470,9 @@ export default function ExamAttempt() {
 
   // On submit, save answers and all logs
   const handleSubmit = async (e) => {
-    e.preventDefault();
+    if (e && typeof e.preventDefault === 'function') {
+      e.preventDefault();
+    }
     if (!window.confirm("Are you sure you want to submit the exam? You cannot change your answers after submission.")) return;
     
     setIsSubmitting(true);
@@ -1421,13 +1490,21 @@ export default function ExamAttempt() {
         throw new Error('User not authenticated');
       }
 
-      // Stop recording if it's active
+      // Stop recording if it's active and wait for the blob
+      let blobToUpload = recordingBlob;
+      
       if (status === 'recording') {
         console.log('Stopping recording before submission...');
+        
+        const stopPromise = new Promise((resolve) => {
+          onStopResolver.current = resolve;
+        });
+        
         stopRecording();
         
-        // Small delay to allow recording to stop
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        // Wait for the onStop callback of useReactMediaRecorder to fire and resolve
+        blobToUpload = await stopPromise;
+        console.log('Received recording blob from stopped recorder:', blobToUpload);
       }
 
       // Save answers (always, even if recording upload failed)
@@ -1438,9 +1515,27 @@ export default function ExamAttempt() {
         score: calculateScore(answers, questions), // Use the questions from state
       };
       
-      // Include recording URL if available (might be set by onStop handler)
-      if (recordingUrl) {
-        updateFields.recording_url = recordingUrl;
+      // Upload recording to Cloudinary synchronously in submission flow
+      if (blobToUpload) {
+        setIsUploading(true);
+        setUploadProgress(0);
+        console.log('Awaiting Cloudinary upload in submission flow...');
+        try {
+          const uploadResult = await uploadBlob(blobToUpload, user.id, (progress) => {
+            setUploadProgress(progress);
+          });
+          
+          if (uploadResult && uploadResult.url) {
+            updateFields.recording_url = uploadResult.url;
+            updateFields.cloudinary_public_id = uploadResult.public_id;
+            updateFields.recording_duration = uploadResult.duration;
+          }
+        } catch (uploadError) {
+          console.error('Recording upload failed:', uploadError);
+          setUploadWarning('Video upload failed, but your answers are saved.');
+        } finally {
+          setIsUploading(false);
+        }
       }
       
       try {
@@ -1488,17 +1583,25 @@ export default function ExamAttempt() {
         currentAttemptId = inserted.id;
         attemptData = inserted;
       }
+
+      // Clean up duplicate unsubmitted attempts to prevent dangling active states on the dashboard
+      if (currentAttemptId) {
+        supabase
+          .from('exam_attempts')
+          .delete()
+          .eq('exam_id', examId)
+          .eq('student_id', user.id)
+          .is('submitted_at', null)
+          .neq('id', currentAttemptId)
+          .then(({ error }) => {
+            if (error) console.error('Error cleaning up duplicate attempts:', error);
+            else console.log('Cleaned up duplicate unsubmitted attempts successfully');
+          });
+      }
+
       } catch (err) {
         console.error('Error saving answers:', err);
         throw new Error('Could not fully save your answers. Please inform your instructor.');
-      }
-      
-      // If we have a recording blob that hasn't been uploaded yet, process it in the background
-      if (recordingBlob && !recordingUrl) {
-        console.log('Processing recording in the background...');
-        processRecording(recordingBlob, user.id)
-          .then(() => console.log('Background recording processing completed'))
-          .catch(err => console.error('Background recording processing failed:', err));
       }
       
       // Navigate to the done page with the current state
@@ -1525,6 +1628,17 @@ export default function ExamAttempt() {
   const currentQuestion = questions[currentQuestionIndex] || {}
 
   if (isLoading) return <Loader fullPage message="Loading exam content..." />;
+  if (isSubmitting) {
+    return (
+      <Loader 
+        fullPage 
+        message={isUploading 
+          ? `Uploading your proctor recording... ${uploadProgress}%` 
+          : "Submitting your exam responses securely..."
+        } 
+      />
+    );
+  }
   if (error) return <div>{error}</div>;
 
   // Status indicator component with improved styling and animations
