@@ -12,6 +12,7 @@ import {
 import { jsPDF } from "jspdf"
 import "../AdminDashboard.css"
 import { generateExamQuestions } from "../utils/groqService"
+import LiveMonitoring from "../Components/LiveMonitoring"
 
 // Modal component for viewing/editing questions
 const QuestionModal = ({ exam, onClose, onSave }) => {
@@ -264,6 +265,10 @@ FACE_NOT_FOUND: 0,
   const [createExamRandomizeQuestions, setCreateExamRandomizeQuestions] = useState(true);
   const [createExamEnableCalculator, setCreateExamEnableCalculator] = useState(false);
   const [createExamTotalMarks, setCreateExamTotalMarks] = useState(100);
+
+  // Live Monitor Modal States
+  const [activeLiveMonitorExamId, setActiveLiveMonitorExamId] = useState(null);
+  const [activeLiveMonitorTitle, setActiveLiveMonitorTitle] = useState("");
 
   const addCreateExamQuestion = () => {
     setCreateExamQuestions([
@@ -1100,12 +1105,8 @@ FACE_NOT_FOUND: 0,
                       
                       return (
                         <div key={attempt.id} className="live-monitor-card" style={{ cursor: 'pointer' }} onClick={() => {
-                          const studentUser = users.find(u => u.id === attempt.student_id);
-                          if (studentUser) {
-                            setSelectedUser(studentUser);
-                            setSelectedAttempt(attempt);
-                            setActiveTab('students');
-                          }
+                          setActiveLiveMonitorExamId(attempt.exam_id);
+                          setActiveLiveMonitorTitle(attempt.exam_title || 'Live Stream');
                         }}>
                           <div className="live-monitor-video-box">
                             <div className="disconnected-placeholder" style={{ backgroundColor: '#111827' }}>
@@ -2293,6 +2294,42 @@ FACE_NOT_FOUND: 0,
                 </button>
               </div>
               <span style={{ fontSize: '0.75rem', color: '#9CA3AF' }}>Students will enter this code to start diagnostic tests.</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Live Monitor Modal */}
+      {activeLiveMonitorExamId && (
+        <div className="modal-overlay" style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex',
+          justifyContent: 'center', alignItems: 'center', zIndex: 1200,
+          backdropFilter: 'blur(4px)'
+        }}>
+          <div className="modal-content" style={{
+            backgroundColor: 'white', padding: '28px', borderRadius: '16px',
+            width: '95%', maxWidth: '1600px', height: '90vh',
+            boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)',
+            display: 'flex', flexDirection: 'column'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1.5px solid #F1F5F9', paddingBottom: '16px', marginBottom: '20px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span className="live-pulse-dot" style={{ display: 'inline-block', width: '12px', height: '12px', backgroundColor: '#EF4444', borderRadius: '50%', boxShadow: '0 0 0 4px rgba(239, 68, 68, 0.2)' }}></span>
+                <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 800, color: '#1E293B' }}>
+                  Live Proctor Monitor Feed: <span style={{ color: '#059669' }}>{activeLiveMonitorTitle}</span>
+                </h3>
+              </div>
+              <button 
+                onClick={() => { setActiveLiveMonitorExamId(null); }} 
+                style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#9CA3AF', display: 'flex', alignItems: 'center' }}
+              >
+                <FaTimes />
+              </button>
+            </div>
+            
+            <div style={{ flex: 1, overflowY: 'auto' }}>
+              <LiveMonitoring examId={activeLiveMonitorExamId} />
             </div>
           </div>
         </div>

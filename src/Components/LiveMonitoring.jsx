@@ -650,7 +650,7 @@ const LiveMonitoring = ({ examId: propExamId }) => {
         )}
       </div>
 
-      <style jsx>{`
+      <style>{`
         .live-monitoring {
           padding: 20px;
           max-width: 1800px;
