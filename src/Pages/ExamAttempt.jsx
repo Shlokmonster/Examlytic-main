@@ -6,7 +6,7 @@ import Navbar from "../Components/common/Navbar"
 import { Room } from 'livekit-client';
 import { FaVideo, FaVideoSlash, FaDesktop, FaExclamationTriangle, FaUser, FaFlag, FaRegFlag, FaLock, FaChevronLeft, FaChevronRight, FaCalculator, FaCheckCircle, FaInfoCircle } from 'react-icons/fa';
 import { useReactMediaRecorder } from 'react-media-recorder';
-import { FilesetResolver, FaceDetector } from '@mediapipe/tasks-vision';
+import { FilesetResolver, FaceLandmarker } from '@mediapipe/tasks-vision';
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
 import * as tf from '@tensorflow/tfjs';
 import { uploadToCloudinary } from "../utils/cloudinary";
@@ -62,6 +62,7 @@ export default function ExamAttempt() {
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(null)
   const videoRef = useRef()
+  const canvasRef = useRef()
   const webcamStreamRef = useRef(null)
   const screenStreamRef = useRef(null)
   const manualMediaRecorderRef = useRef(null)
@@ -85,6 +86,7 @@ export default function ExamAttempt() {
   const [faceDetector, setFaceDetector] = useState(null);
   const [objectDetector, setObjectDetector] = useState(null);
   const [detectionRunning, setDetectionRunning] = useState(false);
+  const detectionRunningRef = useRef(false);
   const [flags, setFlags] = useState([]);
   const [lastFlagTime, setLastFlagTime] = useState(0);
   const [flaggedQuestions, setFlaggedQuestions] = useState({});
@@ -121,16 +123,15 @@ export default function ExamAttempt() {
         'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm'
       );
       
-      const faceDetector = await FaceDetector.createFromOptions(
+      const faceLandmarker = await FaceLandmarker.createFromOptions(
         vision,
         {
           baseOptions: {
-            modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite',
+            modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
             delegate: 'GPU'
           },
           runningMode: 'VIDEO',
-          minDetectionConfidence: 0.7,
-          minSuppressionThreshold: 0.3
+          numFaces: 2
         }
       );
       
@@ -140,7 +141,7 @@ export default function ExamAttempt() {
         base: 'lite_mobilenet_v2'
       });
       
-      setFaceDetector(faceDetector);
+      setFaceDetector(faceLandmarker);
       setObjectDetector(objectDetector);
       console.log('Detectors initialized');
     } catch (error) {
@@ -286,10 +287,10 @@ export default function ExamAttempt() {
 
   // Run face and object detection
   const runDetections = useCallback(async () => {
-    if (!faceDetector || !detectionRunning || !videoRef.current) {
+    if (!faceDetector || !detectionRunningRef.current || !videoRef.current) {
       console.log('Detection not running. Check conditions:', {
         faceDetector: !!faceDetector,
-        detectionRunning,
+        detectionRunning: detectionRunningRef.current,
         videoRef: !!videoRef.current,
         videoReady: videoRef.current?.readyState
       });
@@ -299,54 +300,130 @@ export default function ExamAttempt() {
     const video = videoRef.current;
     if (video.readyState < 2) {
       console.log('Video not ready. Ready state:', video.readyState);
-      if (detectionRunning) {
+      if (detectionRunningRef.current) {
         requestAnimationFrame(runDetections);
       }
       return;
     }
     
     try {
-      // Run face detection
-      const detections = await faceDetector.detectForVideo(video, Date.now());
-      console.log('Face detections:', detections.detections.length);
+      // Run face landmark detection
+      const result = await faceDetector.detectForVideo(video, Date.now());
+      const faceCount = result.faceLandmarks ? result.faceLandmarks.length : 0;
       
+      // Update canvas overlay size and context
+      const canvas = canvasRef.current;
+      if (canvas) {
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 480;
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // Draw mesh wireframe for each detected face
+        if (faceCount > 0) {
+          ctx.strokeStyle = 'rgba(43, 124, 255, 0.35)';
+          ctx.fillStyle = 'rgba(43, 124, 255, 0.5)';
+          ctx.lineWidth = 1;
+          
+          result.faceLandmarks.forEach(landmarks => {
+            // Draw all mesh points
+            landmarks.forEach((pt, pIdx) => {
+              const px = pt.x * canvas.width;
+              const py = pt.y * canvas.height;
+              ctx.beginPath();
+              ctx.arc(px, py, 1.2, 0, 2 * Math.PI);
+              ctx.fill();
+            });
+            
+            // Draw major face contours
+            const drawContour = (indices, close = false) => {
+              ctx.beginPath();
+              indices.forEach((idx, i) => {
+                const pt = landmarks[idx];
+                if (pt) {
+                  const px = pt.x * canvas.width;
+                  const py = pt.y * canvas.height;
+                  if (i === 0) ctx.moveTo(px, py);
+                  else ctx.lineTo(px, py);
+                }
+              });
+              if (close) ctx.closePath();
+              ctx.stroke();
+            };
+
+            // Face Oval Contour
+            drawContour([10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109], true);
+            // Eyebrows
+            drawContour([70, 63, 105, 66, 107]);
+            drawContour([300, 293, 334, 296, 336]);
+            // Eyes
+            drawContour([33, 7, 163, 144, 145, 153, 154, 155, 133], true);
+            drawContour([263, 249, 390, 373, 374, 380, 381, 382, 362], true);
+            // Lips
+            drawContour([61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291], true);
+          });
+        }
+      }
+
       // Check for multiple faces
-      if (detections.detections.length >= 2) {
-        console.log('Multiple faces detected:', detections.detections.length);
+      if (faceCount >= 2) {
+        console.log('Multiple faces detected:', faceCount);
         await saveFlag('MULTIPLE_FACES_DETECTED', {
-          face_count: detections.detections.length,
-          detection_confidence: Math.max(...detections.detections.map(d => d.categories[0].score)),
+          face_count: faceCount,
           detection_timestamp: new Date().toISOString()
         });
       } 
       // Check if no face is detected
-      else if (detections.detections.length === 0) {
+      else if (faceCount === 0) {
         console.log('No face detected');
         await saveFlag('NO_FACE_DETECTED', {
-          detection_confidence: 0,
           detection_timestamp: new Date().toISOString()
         });
       }
-      // Check face position
+      // Check head pose and eye gaze for the single face
       else {
-        const face = detections.detections[0];
-        const faceBox = face.boundingBox;
-        const centerX = faceBox.originX + (faceBox.width / 2);
-        const centerY = faceBox.originY + (faceBox.height / 2);
+        const landmarks = result.faceLandmarks[0];
+        const nose = landmarks[4];
+        const leftEye = landmarks[263];
+        const rightEye = landmarks[33];
+        const chin = landmarks[152];
         
-        // Check if face is not centered
-        const video = videoRef.current;
-        const xOffset = Math.abs((centerX / video.videoWidth) - 0.5);
-        const yOffset = Math.abs((centerY / video.videoHeight) - 0.5);
-        
-        if (xOffset > 0.3 || yOffset > 0.3) {
-          console.log('Irregular face position detected');
-          await saveFlag('IRREGULAR_FACE_POSITION', {
-            x_position: centerX / video.videoWidth,
-            y_position: centerY / video.videoHeight,
-            detection_confidence: face.categories[0].score,
-            detection_timestamp: new Date().toISOString()
-          });
+        if (nose && leftEye && rightEye && chin) {
+          // 1. Yaw calculation (Looking left / right)
+          const distLeft = Math.abs(nose.x - leftEye.x);
+          const distRight = Math.abs(nose.x - rightEye.x);
+          const totalDist = distLeft + distRight;
+          
+          if (totalDist > 0) {
+            const yawRatio = distLeft / totalDist;
+            // flag if looked too far left (yawRatio > 0.72) or right (yawRatio < 0.28)
+            if (yawRatio > 0.72 || yawRatio < 0.28) {
+              console.log('Head Yaw anomaly detected:', yawRatio);
+              await saveFlag('LOOKING_AWAY', {
+                rotation_type: 'horizontal_yaw',
+                ratio: yawRatio,
+                direction: yawRatio > 0.72 ? 'Left' : 'Right',
+                detection_timestamp: new Date().toISOString()
+              });
+            }
+          }
+          
+          // 2. Pitch calculation (Looking up / down)
+          const eyeDistance = Math.hypot(leftEye.x - rightEye.x, leftEye.y - rightEye.y);
+          const verticalDistance = Math.abs(nose.y - chin.y);
+          if (eyeDistance > 0) {
+            const pitchRatio = verticalDistance / eyeDistance;
+            // flag if looked too far up or down
+            if (pitchRatio < 1.0 || pitchRatio > 1.9) {
+              console.log('Head Pitch anomaly detected:', pitchRatio);
+              await saveFlag('LOOKING_AWAY', {
+                rotation_type: 'vertical_pitch',
+                ratio: pitchRatio,
+                direction: pitchRatio < 1.0 ? 'Down' : 'Up',
+                detection_timestamp: new Date().toISOString()
+              });
+            }
+          }
         }
       }
       
@@ -358,7 +435,7 @@ export default function ExamAttempt() {
       }
       
       // Continue detection loop
-      if (detectionRunning) {
+      if (detectionRunningRef.current) {
         requestAnimationFrame(runDetections);
       }
       
@@ -370,90 +447,20 @@ export default function ExamAttempt() {
       });
       
       // Retry after a delay if there's an error
-      if (detectionRunning) {
+      if (detectionRunningRef.current) {
         setTimeout(runDetections, 1000);
       }
     }
-  }, [faceDetector, objectDetector, detectionRunning, saveFlag]);
+  }, [faceDetector, objectDetector, saveFlag]);
 
   // Run face detection
-  const runFaceDetection = useCallback(async () => {
-    if (!faceDetector || !videoRef.current || !detectionRunning) {
-      console.log('Face detection not running. Conditions:', {
-        faceDetector: !!faceDetector,
-        videoRef: !!videoRef.current,
-        detectionRunning
-      });
-      return;
-    }
-    
-    try {
-      console.log('Running face detection...');
-      const detections = await faceDetector.detectForVideo(videoRef.current, Date.now());
-      console.log('Face detections:', detections.detections.length);
-      
-      // Check for multiple faces
-      if (detections.detections.length >= 2) {
-        console.log('Multiple faces detected:', detections.detections.length);
-        await saveFlag('MULTIPLE_FACES_DETECTED', {
-          face_count: detections.detections.length,
-          detection_confidence: Math.max(...detections.detections.map(d => d.categories[0].score)),
-          detection_timestamp: new Date().toISOString()
-        });
-      } 
-      // Check if no face is detected
-      else if (detections.detections.length === 0) {
-        console.log('No face detected');
-        await saveFlag('NO_FACE_DETECTED', {
-          detection_confidence: 0,
-          detection_timestamp: new Date().toISOString()
-        });
-      }
-      // Check face position
-      else {
-        const face = detections.detections[0];
-        const faceBox = face.boundingBox;
-        const centerX = faceBox.originX + (faceBox.width / 2);
-        const centerY = faceBox.originY + (faceBox.height / 2);
-        
-        // Check if face is not centered (simple check - can be refined)
-        const video = videoRef.current;
-        const xOffset = Math.abs((centerX / video.videoWidth) - 0.5);
-        const yOffset = Math.abs((centerY / video.videoHeight) - 0.5);
-        
-        if (xOffset > 0.3 || yOffset > 0.3) {
-          console.log('Irregular face position detected');
-          await saveFlag('IRREGULAR_FACE_POSITION', {
-            x_position: centerX / video.videoWidth,
-            y_position: centerY / video.videoHeight,
-            detection_confidence: face.categories[0].score,
-            detection_timestamp: new Date().toISOString()
-          });
-        }
-      }
-      
-      // Continue detection loop
-      if (detectionRunning) {
-        requestAnimationFrame(runFaceDetection);
-      }
-    } catch (error) {
-      console.error('❌ Error in face detection:', {
-        message: error.message,
-        stack: error.stack,
-        timestamp: new Date().toISOString()
-      });
-      
-      // Retry after a delay if there's an error
-      if (detectionRunning) {
-        setTimeout(runFaceDetection, 1000);
-      }
-    }
-  }, [faceDetector, detectionRunning, saveFlag]);
+
 
   // Clean up resources
   const cleanupResources = useCallback(() => {
     console.log('Cleaning up resources...');
     isDisposedRef.current = true;
+    detectionRunningRef.current = false;
     setDetectionRunning(false);
     
     if (webcamStreamRef.current) {
@@ -748,8 +755,9 @@ export default function ExamAttempt() {
             readyState: videoRef.current.readyState
           });
           
-          if (faceDetector && objectDetector && !detectionRunning) {
+          if (faceDetector && objectDetector && !detectionRunningRef.current) {
             console.log('All detectors ready, starting detection loop');
+            detectionRunningRef.current = true;
             setDetectionRunning(true);
             // Start detection loop
             runDetections();
@@ -796,6 +804,7 @@ export default function ExamAttempt() {
         
         if (stream) {
           console.log('Webcam stream ready, starting detections...');
+          detectionRunningRef.current = true;
           setDetectionRunning(true);
           runDetections();
         }
@@ -813,6 +822,7 @@ export default function ExamAttempt() {
     // Cleanup function
     return () => {
       console.log('Cleaning up...');
+      detectionRunningRef.current = false;
       setDetectionRunning(false);
       
       // Clean up face detector
@@ -1885,6 +1895,16 @@ export default function ExamAttempt() {
           object-fit: cover;
           transform: scaleX(-1);
         }
+        .webcam-canvas {
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          pointer-events: none;
+          z-index: 5;
+          transform: scaleX(-1);
+        }
         .webcam-placeholder {
           display: flex;
           flex-direction: column;
@@ -2305,6 +2325,7 @@ export default function ExamAttempt() {
           {/* Webcam Box */}
           <div className="webcam-card-new">
             <video ref={videoRef} autoPlay muted playsInline className="webcam-video" />
+            <canvas ref={canvasRef} className="webcam-canvas" />
             <div className="webcam-timestamp">
               {formatDateTime(currentDateTime)}
             </div>

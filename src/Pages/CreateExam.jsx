@@ -27,224 +27,205 @@ const SAMPLE_QUESTIONS = [
 
 const styles = `
   .create-exam-container {
-    max-width: 1100px;
-    margin: 0 auto;
-    padding: 30px 20px;
-    background: #f8f9fa;
-    min-height: 100vh;
-  
+    max-width: 1000px;
+    margin: 40px auto;
+    padding: 0 24px 80px;
+    font-family: 'Inter', sans-serif;
   }
   
   .exam-header {
-    text-align: center;
-    margin-bottom: 40px;
-    padding: 30px;
-    background: white;
-    border-radius: 12px;
-    box-shadow: 0 2px 10px rgba(64, 122, 191, 0.1);
-    border-top: 4px solid #407ABF;
+    background: linear-gradient(135deg, #059669 0%, #047857 100%);
+    border-radius: 16px;
+    padding: 32px 40px;
+    margin-bottom: 32px;
+    color: #ffffff;
+    box-shadow: 0 10px 25px -5px rgba(5, 150, 105, 0.1);
   }
   
   .exam-header h1 {
-    color: #407ABF;
-    font-size: 2.5rem;
-    margin-bottom: 10px;
-    font-weight: 700;
+    font-size: 2rem;
+    font-weight: 800;
+    margin: 0 0 8px 0;
+    letter-spacing: -0.02em;
   }
   
   .subtitle {
-    color: #666;
-    font-size: 1.1rem;
-    margin-bottom: 0;
+    font-size: 0.95rem;
+    color: #A7F3D0;
+    margin: 0;
+    font-weight: 500;
+  }
+  
+  .exam-card-wrapper {
+    background: #ffffff;
+    border: 1px solid #E2E8F0;
+    border-radius: 16px;
+    padding: 32px;
+    box-shadow: 0 4px 6px -1px rgba(0,0,0,0.02);
+    margin-bottom: 28px;
+  }
+  
+  .exam-card-title {
+    font-size: 1.15rem;
+    font-weight: 800;
+    color: #111827;
+    margin: 0 0 24px 0;
+    border-bottom: 1.5px dashed #E2E8F0;
+    padding-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
   }
   
   .ai-generator-section {
-    margin: 30px 0;
-    padding: 25px;
-    background: linear-gradient(135deg, #407ABF 0%, #5a8bc7 100%);
-    border-radius: 12px;
-    color: white;
-    box-shadow: 0 4px 15px rgba(64, 122, 191, 0.2);
+    background: linear-gradient(135deg, #1E293B 0%, #0F172A 100%);
+    border-radius: 16px;
+    padding: 32px;
+    color: #ffffff;
+    margin-bottom: 32px;
+    box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1);
+    position: relative;
+    overflow: hidden;
   }
   
   .ai-generator-section h3 {
-    margin-bottom: 20px;
-    font-size: 1.3rem;
-    font-weight: 600;
+    font-size: 1.15rem;
+    font-weight: 800;
+    color: #ffffff;
+    margin: 0 0 16px 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
   
   .ai-input-group {
     display: flex;
     gap: 12px;
-    margin-bottom: 15px;
-    flex-wrap: wrap;
+    align-items: center;
   }
   
   .ai-input-group input {
     flex: 1;
-    min-width: 250px;
+    background: #334155;
+    border: 1px solid #475569;
+    color: #ffffff;
     padding: 12px 16px;
-    border: none;
     border-radius: 8px;
-    font-size: 14px;
-    background: white;
-    color: #333;
-    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    font-size: 0.9rem;
+    outline: none;
+    transition: all 0.2s;
+  }
+  
+  .ai-input-group input:focus {
+    border-color: #059669;
+    background: #1e293b;
   }
   
   .ai-input-group select {
+    background: #334155;
+    border: 1px solid #475569;
+    color: #ffffff;
     padding: 12px 16px;
-    border: none;
     border-radius: 8px;
-    background: white;
-    color: #333;
-    font-size: 14px;
-    min-width: 120px;
-    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    font-size: 0.9rem;
+    outline: none;
+    cursor: pointer;
   }
   
   .ai-generate-btn {
-    padding: 12px 24px;
-    background: #4CAF50;
-    color: white;
+    background: #059669;
+    color: #ffffff;
     border: none;
+    padding: 12px 24px;
     border-radius: 8px;
-    font-weight: 600;
+    font-weight: 700;
+    font-size: 0.9rem;
     cursor: pointer;
-    transition: all 0.3s ease;
-    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-    min-width: 140px;
+    transition: all 0.2s;
   }
   
   .ai-generate-btn:hover:not(:disabled) {
-    background: #45a049;
-    transform: translateY(-2px);
-    box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+    background: #047857;
+    transform: translateY(-1px);
   }
   
   .ai-generate-btn:disabled {
-    background: #ccc;
+    background: #475569;
     cursor: not-allowed;
-    transform: none;
   }
   
   .ai-hint {
-    font-size: 14px;
-    opacity: 0.9;
-    margin-top: 10px;
+    font-size: 0.8rem;
+    color: #94A3B8;
+    margin: 12px 0 0 0;
   }
   
   .import-export-section {
-    margin: 30px 0;
-    background: white;
-    border-radius: 12px;
+    background: #ffffff;
+    border: 1px solid #E2E8F0;
+    border-radius: 16px;
+    margin-bottom: 32px;
     overflow: hidden;
-    box-shadow: 0 2px 10px rgba(64, 122, 191, 0.1);
   }
   
   .import-header {
-    background: #407ABF;
-    color: white;
-    padding: 20px 25px;
+    background: #F8FAFC;
+    padding: 20px 32px;
     display: flex;
-    align-items: center;
     justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #E2E8F0;
   }
   
   .import-header h3 {
+    font-size: 1rem;
+    font-weight: 800;
+    color: #1F2937;
     margin: 0;
-    font-size: 1.2rem;
-    font-weight: 600;
   }
   
   .toggle-import-btn {
-    background: white;
-    color: #407ABF;
-    border: none;
+    background: transparent;
+    border: 1px solid #D1D5DB;
+    color: #4B5563;
     padding: 8px 16px;
-    border-radius: 6px;
-    cursor: pointer;
+    border-radius: 8px;
+    font-size: 0.85rem;
     font-weight: 600;
-    transition: all 0.3s ease;
+    cursor: pointer;
+    transition: all 0.2s;
   }
   
   .toggle-import-btn:hover {
-    background: #f0f8ff;
+    background: #F1F5F9;
   }
   
   .json-import-container {
-    padding: 25px;
-    background: white;
+    padding: 32px;
+    background: #ffffff;
   }
   
   .json-actions {
     display: flex;
     gap: 12px;
     margin-bottom: 20px;
-    flex-wrap: wrap;
   }
   
   .json-textarea {
     width: 100%;
-    padding: 16px;
-    border: 2px solid #e0e0e0;
+    background: #F8FAFC;
+    border: 1px solid #E2E8F0;
     border-radius: 8px;
     font-family: 'Courier New', monospace;
-    font-size: 14px;
-    resize: vertical;
-    min-height: 200px;
-    background: #f9f9f9;
-    transition: border-color 0.3s ease;
+    font-size: 0.85rem;
+    padding: 16px;
+    outline: none;
+    transition: all 0.2s;
   }
   
   .json-textarea:focus {
-    outline: none;
-    border-color: #407ABF;
-    background: white;
-  }
-  
-  .json-format-hint {
-    margin-top: 20px;
-    background: #f0f8ff;
-    padding: 20px;
-    border-radius: 8px;
-    border-left: 4px solid #407ABF;
-  }
-  
-  .json-format-hint h4 {
-    color: #407ABF;
-    margin-bottom: 15px;
-    font-size: 1.1rem;
-  }
-  
-  .json-format-hint pre {
-    background: white;
-    padding: 15px;
-    border-radius: 6px;
-    overflow-x: auto;
-    font-size: 13px;
-    border: 1px solid #e0e0e0;
-  }
-  
-  .exam-form {
-    background: white;
-    border-radius: 12px;
-    padding: 30px;
-    box-shadow: 0 2px 10px rgba(64, 122, 191, 0.1);
-  }
-  
-  .form-section {
-    margin-bottom: 40px;
-  }
-  
-  .form-section h3 {
-    color: #407ABF;
-    font-size: 1.4rem;
-    margin-bottom: 25px;
-    font-weight: 600;
-    display: flex;
-    align-items: center;
-    gap: 10px;
+    border-color: #059669;
+    background: #ffffff;
   }
   
   .form-row {
@@ -254,34 +235,16 @@ const styles = `
     margin-bottom: 20px;
   }
   
-  @media (max-width: 768px) {
-    .form-row {
-      grid-template-columns: 1fr;
-    }
-    
-    .ai-input-group {
-      flex-direction: column;
-    }
-    
-    .ai-input-group input {
-      min-width: auto;
-    }
-  }
-  
   .form-group {
-    margin-bottom: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
   }
   
   .form-group label {
-    display: block;
-    margin-bottom: 8px;
-    font-weight: 600;
-    color: #333;
-    font-size: 14px;
-  }
-  
-  .required {
-    color: #e74c3c;
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: #374151;
   }
   
   .form-group input,
@@ -289,134 +252,117 @@ const styles = `
   .form-group select {
     width: 100%;
     padding: 12px 16px;
-    border: 2px solid #e0e0e0;
+    border: 1.5px solid #E2E8F0;
     border-radius: 8px;
-    font-size: 14px;
-    transition: all 0.3s ease;
-    background: white;
+    font-size: 0.9rem;
+    color: #1F2937;
+    background: #ffffff;
+    outline: none;
+    transition: all 0.2s;
   }
   
   .form-group input:focus,
   .form-group textarea:focus,
   .form-group select:focus {
-    outline: none;
-    border-color: #407ABF;
-    box-shadow: 0 0 0 3px rgba(64, 122, 191, 0.1);
+    border-color: #059669;
+    box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.05);
   }
   
   .questions-section {
-    margin-top: 40px;
+    margin-top: 32px;
   }
   
   .section-header {
     display: flex;
-    align-items: center;
     justify-content: space-between;
-    margin-bottom: 25px;
-    padding-bottom: 15px;
-    border-bottom: 2px solid #407ABF;
+    align-items: center;
+    border-bottom: 1.5px solid #E2E8F0;
+    padding-bottom: 16px;
+    margin-bottom: 28px;
   }
   
   .section-header h3 {
-    color: #407ABF;
-    font-size: 1.4rem;
+    font-size: 1.15rem;
+    font-weight: 800;
+    color: #111827;
     margin: 0;
-    font-weight: 600;
-    display: flex;
-    align-items: center;
-    gap: 10px;
   }
   
   .question-count {
-    background: #407ABF;
-    color: white;
-    padding: 6px 12px;
-    border-radius: 20px;
-    font-size: 12px;
-    font-weight: 600;
+    background: #ECFDF5;
+    color: #059669;
+    font-size: 0.8rem;
+    font-weight: 700;
+    padding: 4px 12px;
+    border-radius: 12px;
   }
   
   .question-card {
-    background: white;
-    border: 2px solid #e0e0e0;
-    border-radius: 12px;
-    padding: 25px;
-    margin-bottom: 25px;
-    transition: all 0.3s ease;
-    box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+    background: #ffffff;
+    border: 1.5px solid #E2E8F0;
+    border-radius: 16px;
+    padding: 28px;
+    margin-bottom: 28px;
+    transition: all 0.2s;
   }
   
   .question-card:hover {
-    border-color: #407ABF;
-    box-shadow: 0 4px 15px rgba(64, 122, 191, 0.1);
+    border-color: #059669;
+    box-shadow: 0 4px 12px rgba(5, 150, 105, 0.02);
   }
   
   .question-header {
     display: flex;
-    align-items: center;
     justify-content: space-between;
+    align-items: center;
     margin-bottom: 20px;
   }
   
   .question-header h4 {
-    color: #407ABF;
-    font-size: 1.2rem;
+    font-size: 1rem;
+    font-weight: 800;
+    color: #111827;
     margin: 0;
-    font-weight: 600;
   }
   
   .question-type-toggle {
     display: flex;
-    gap: 8px;
-    margin-bottom: 20px;
-    background: #f8f9fa;
+    background: #F1F5F9;
     padding: 4px;
     border-radius: 8px;
+    gap: 4px;
+    margin-bottom: 20px;
   }
   
   .toggle-btn {
     flex: 1;
-    padding: 12px 16px;
+    background: transparent;
     border: none;
+    color: #475569;
+    font-size: 0.85rem;
+    font-weight: 700;
+    padding: 10px;
     border-radius: 6px;
     cursor: pointer;
-    font-weight: 600;
-    transition: all 0.3s ease;
-    background: transparent;
-    color: #666;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
+    transition: all 0.2s;
   }
   
   .toggle-btn.active {
-    background: #407ABF;
-    color: white;
-    box-shadow: 0 2px 5px rgba(64, 122, 191, 0.3);
-  }
-  
-  .toggle-btn:hover:not(.active) {
-    background: white;
-    color: #407ABF;
+    background: #ffffff;
+    color: #059669;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
   }
   
   .mcq-options {
-    margin-top: 20px;
-  }
-  
-  .mcq-options label {
-    font-weight: 600;
-    margin-bottom: 15px;
-    display: block;
-    color: #333;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
   }
   
   .option-row {
     display: flex;
     align-items: center;
     gap: 12px;
-    margin-bottom: 12px;
   }
   
   .option-radio {
@@ -428,233 +374,169 @@ const styles = `
   .option-radio input[type="radio"] {
     width: 18px;
     height: 18px;
-    accent-color: #4CAF50;
+    cursor: pointer;
+    accent-color: #059669;
   }
   
   .option-letter {
-    font-weight: 600;
-    color: #407ABF;
-    min-width: 25px;
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: #6B7280;
   }
   
   .option-input {
     flex: 1;
     padding: 10px 14px;
-    border: 2px solid #e0e0e0;
-    border-radius: 6px;
-    font-size: 14px;
-    transition: border-color 0.3s ease;
+    border: 1.5px solid #E2E8F0;
+    border-radius: 8px;
+    font-size: 0.875rem;
+    outline: none;
+    transition: all 0.2s;
   }
   
   .option-input:focus {
-    outline: none;
-    border-color: #407ABF;
+    border-color: #059669;
   }
   
-  .answerable-field {
-    margin-top: 20px;
+  .btn-delete {
+    background: #FEF2F2;
+    border: 1px solid #FEE2E2;
+    color: #EF4444;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s;
   }
   
-  .answerable-field label {
-    font-weight: 600;
-    margin-bottom: 8px;
-    display: block;
-    color: #333;
+  .btn-delete:hover {
+    background: #EF4444;
+    color: #ffffff;
   }
   
   .add-question-actions {
     display: flex;
-    align-items: center;
     justify-content: space-between;
-    margin-top: 30px;
-    padding-top: 20px;
-    border-top: 1px solid #e0e0e0;
-  }
-  
-  .question-stats {
-    display: flex;
-    gap: 20px;
-  }
-  
-  .stat {
-    display: flex;
     align-items: center;
-    gap: 6px;
-    color: #666;
-    font-size: 14px;
-  }
-  
-  .form-actions {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-top: 40px;
-    padding-top: 25px;
-    border-top: 2px solid #e0e0e0;
-  }
-  
-  .action-buttons {
-    display: flex;
-    gap: 12px;
+    margin-top: 28px;
   }
   
   .btn {
     padding: 12px 24px;
-    border: none;
     border-radius: 8px;
+    font-size: 0.875rem;
+    font-weight: 700;
     cursor: pointer;
-    font-size: 14px;
-    font-weight: 600;
-    transition: all 0.3s ease;
+    transition: all 0.2s;
     display: flex;
     align-items: center;
     gap: 8px;
-    text-decoration: none;
+    border: none;
   }
   
   .btn-primary {
-    background: #4CAF50;
-    color: white;
-    box-shadow: 0 2px 5px rgba(76, 175, 80, 0.3);
+    background: #059669;
+    color: #ffffff;
   }
   
   .btn-primary:hover {
-    background: #45a049;
-    transform: translateY(-2px);
-    box-shadow: 0 4px 10px rgba(76, 175, 80, 0.4);
+    background: #047857;
   }
   
   .btn-outline {
-    background: white;
-    color: #407ABF;
-    border: 2px solid #407ABF;
+    background: #ffffff;
+    border: 1.5px solid #E2E8F0;
+    color: #374151;
   }
   
   .btn-outline:hover {
-    background: #407ABF;
-    color: white;
+    background: #F8FAFC;
+    border-color: #D1D5DB;
   }
   
   .btn-text {
     background: transparent;
-    color: #666;
-    border: none;
+    color: #4B5563;
   }
   
   .btn-text:hover {
-    color: #407ABF;
+    color: #111827;
   }
   
-  .btn-delete {
-    background: #fff5f5;
-    color: #e74c3c;
-    border: 1px solid #e74c3c;
-    padding: 6px 12px;
-    font-size: 12px;
+  /* Toggle Switch Styles */
+  .switch-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 0;
+    border-bottom: 1px solid #F1F5F9;
   }
   
-  .btn-delete:hover {
-    background: #e74c3c;
-    color: white;
+  .switch-row:last-child {
+    border-bottom: none;
   }
   
-  .btn-secondary {
-    background: #f8f9fa;
-    color: #407ABF;
-    border: 1px solid #407ABF;
+  .switch-label-col {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
   }
   
-  .btn-secondary:hover {
-    background: #407ABF;
-    color: white;
+  .switch-title {
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: #1F2937;
   }
   
-  .empty-state {
-    text-align: center;
-    padding: 60px 20px;
-    color: #666;
+  .switch-desc {
+    font-size: 0.75rem;
+    color: #6B7280;
   }
   
-  .empty-state i {
-    font-size: 3rem;
-    color: #ccc;
-    margin-bottom: 20px;
+  .switch-input-wrapper {
+    position: relative;
+    display: inline-block;
+    width: 44px;
+    height: 24px;
   }
   
-  /* Toast customization */
-  .Toastify__toast--success {
-    background: #4CAF50;
+  .switch-input-wrapper input {
+    opacity: 0;
+    width: 0;
+    height: 0;
   }
   
-  .Toastify__toast--error {
-    background: #e74c3c;
-  }
-  
-  .Toastify__toast--info {
-    background: #407ABF;
-  }
-  
-  /* Loading states */
-  .loading {
-    opacity: 0.7;
-    pointer-events: none;
-  }
-  
-  .loading::after {
-    content: '';
+  .switch-slider {
     position: absolute;
-    top: 50%;
-    left: 50%;
-    width: 20px;
-    height: 20px;
-    margin: -10px 0 0 -10px;
-    border: 2px solid #ccc;
-    border-top: 2px solid #407ABF;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #E2E8F0;
+    transition: .3s;
+    border-radius: 24px;
+  }
+  
+  .switch-slider:before {
+    position: absolute;
+    content: "";
+    height: 18px;
+    width: 18px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: .3s;
     border-radius: 50%;
-    animation: spin 1s linear infinite;
   }
   
-  @keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
+  input:checked + .switch-slider {
+    background-color: #059669;
   }
   
-  /* Responsive improvements */
-  @media (max-width: 768px) {
-    .create-exam-container {
-      padding: 20px 15px;
-    }
-    
-    .exam-header {
-      padding: 20px;
-    }
-    
-    .exam-header h1 {
-      font-size: 2rem;
-    }
-    
-    .exam-form {
-      padding: 20px;
-    }
-    
-    .form-actions {
-      flex-direction: column;
-      gap: 15px;
-    }
-    
-    .action-buttons {
-      width: 100%;
-      justify-content: center;
-    }
-    
-    .add-question-actions {
-      flex-direction: column;
-      gap: 15px;
-    }
-    
-    .question-stats {
-      justify-content: center;
-    }
+  input:checked + .switch-slider:before {
+    transform: translateX(20px);
   }
 `
 
@@ -679,6 +561,11 @@ export default function CreateExam() {
   const [aiTopic, setAiTopic] = useState('')
   const [isGenerating, setIsGenerating] = useState(false)
   const [numQuestions, setNumQuestions] = useState(5)
+  const [webcamProctoring, setWebcamProctoring] = useState(true)
+  const [strictTabs, setStrictTabs] = useState(true)
+  const [randomizeQuestions, setRandomizeQuestions] = useState(false)
+  const [enableCalculator, setEnableCalculator] = useState(false)
+  const [totalMarks, setTotalMarks] = useState(100)
 
   const addQuestion = () => {
     setQuestions([
@@ -780,13 +667,22 @@ export default function CreateExam() {
     const user = await supabase.auth.getUser()
     const userId = user.data?.user?.id
 
+    const config = {
+      webcam_proctoring: webcamProctoring,
+      strict_tabs: strictTabs,
+      randomize_questions: randomizeQuestions,
+      enable_calculator: enableCalculator,
+      total_marks: totalMarks
+    };
+    const instructionsWithConfig = `${instructions}\n\n---CONFIG---\n${JSON.stringify(config)}`;
+
     const { error } = await supabase.from("exams").insert([
       {
         title,
         subject,
         duration_minutes: duration,
         support_email: email,
-        instructions,
+        instructions: instructionsWithConfig,
         questions,
         created_by: userId,
       },
@@ -915,11 +811,12 @@ export default function CreateExam() {
         </div>
 
         <form onSubmit={handleSubmit} className="exam-form">
-          <div className="form-section">
-            <h3> Exam Details</h3>
+          {/* Section 1: Exam Parameters */}
+          <div className="exam-card-wrapper">
+            <h3 className="exam-card-title">📝 Exam Parameters & Details</h3>
             <div className="form-row">
               <div className="form-group">
-                <label>Exam Title <span className="required">*</span></label>
+                <label>Exam Title <span style={{ color: '#EF4444' }}>*</span></label>
                 <input 
                   type="text" 
                   value={title} 
@@ -941,7 +838,7 @@ export default function CreateExam() {
             
             <div className="form-row">
               <div className="form-group">
-                <label>Duration (minutes) <span className="required">*</span></label>
+                <label>Duration (minutes) <span style={{ color: '#EF4444' }}>*</span></label>
                 <input 
                   type="number" 
                   value={duration} 
@@ -967,8 +864,85 @@ export default function CreateExam() {
                 value={instructions} 
                 onChange={(e) => setInstructions(e.target.value)} 
                 placeholder="Enter any special instructions for the exam..."
-                rows="4"
+                rows="3"
               />
+            </div>
+          </div>
+
+          {/* Section 2: Proctoring & Security Configurations */}
+          <div className="exam-card-wrapper">
+            <h3 className="exam-card-title">🔒 Proctoring & Workspace Controls</h3>
+            
+            <div className="switch-row">
+              <div className="switch-label-col">
+                <span className="switch-title">AI Video Proctoring</span>
+                <span className="switch-desc">Enforce student webcam feed and face monitoring anomalies.</span>
+              </div>
+              <label className="switch-input-wrapper">
+                <input 
+                  type="checkbox" 
+                  checked={webcamProctoring} 
+                  onChange={(e) => setWebcamProctoring(e.target.checked)} 
+                />
+                <span className="switch-slider"></span>
+              </label>
+            </div>
+
+            <div className="switch-row">
+              <div className="switch-label-col">
+                <span className="switch-title">Strict Tab Restrictions</span>
+                <span className="switch-desc">Track and flag candidate tab switches and window blurred events.</span>
+              </div>
+              <label className="switch-input-wrapper">
+                <input 
+                  type="checkbox" 
+                  checked={strictTabs} 
+                  onChange={(e) => setStrictTabs(e.target.checked)} 
+                />
+                <span className="switch-slider"></span>
+              </label>
+            </div>
+
+            <div className="switch-row">
+              <div className="switch-label-col">
+                <span className="switch-title">Randomize Question Order</span>
+                <span className="switch-desc">Shuffle test questions dynamically for each individual examinee.</span>
+              </div>
+              <label className="switch-input-wrapper">
+                <input 
+                  type="checkbox" 
+                  checked={randomizeQuestions} 
+                  onChange={(e) => setRandomizeQuestions(e.target.checked)} 
+                />
+                <span className="switch-slider"></span>
+              </label>
+            </div>
+
+            <div className="switch-row">
+              <div className="switch-label-col">
+                <span className="switch-title">Enable Calculator Tool</span>
+                <span className="switch-desc">Display a floating scientific calculator widget in the student workspace.</span>
+              </div>
+              <label className="switch-input-wrapper">
+                <input 
+                  type="checkbox" 
+                  checked={enableCalculator} 
+                  onChange={(e) => setEnableCalculator(e.target.checked)} 
+                />
+                <span className="switch-slider"></span>
+              </label>
+            </div>
+
+            <div style={{ marginTop: '20px', display: 'flex', gap: '20px' }}>
+              <div className="form-group" style={{ flex: 1 }}>
+                <label>Total Exam Weighting (marks)</label>
+                <input 
+                  type="number" 
+                  value={totalMarks} 
+                  onChange={(e) => setTotalMarks(parseInt(e.target.value))} 
+                  min="1" 
+                />
+              </div>
             </div>
           </div>
           
