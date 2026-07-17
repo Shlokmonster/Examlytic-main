@@ -143,15 +143,73 @@ Proctors monitor every active session, view AI-generated warning logs, and track
 
 ## 🏗️ System Architecture
 
-<img src="src/assets/SystemDesign.png" alt="System architecture diagram" width="100%">
+### Data Flow Diagram
 
-### Student flow
+```mermaid
+graph TD
+    %% Styling
+    classDef client fill:#3b82f6,stroke:#1d4ed8,stroke-width:2px,color:#fff;
+    classDef server fill:#10b981,stroke:#047857,stroke-width:2px,color:#fff;
+    classDef thirdparty fill:#f59e0b,stroke:#b45309,stroke-width:2px,color:#fff;
+    classDef database fill:#8b5cf6,stroke:#6d28d9,stroke-width:2px,color:#fff;
+    
+    %% Subgraphs
+    subgraph Client_Layer ["Student & Admin Frontend (React + Vite)"]
+        Login["Login Page (Google OAuth)"]
+        Diagnostics["System Diagnostics (Webcam/Mic Check)"]
+        ExamIntro["Exam Intro Page (Lottie Anim)"]
+        ExamAttempt["Exam Attempt Screen"]
+        AdminDashboard["Admin Dashboard"]
+        CreateExam["Create Exam Page"]
+    end
+    
+    subgraph Service_Layer ["Backend & Realtime Server (Express + Node.js)"]
+        Signaling["Socket.io / PeerJS Server (WebRTC Connection)"]
+        ProctorBackend["Express API Gateway"]
+    end
+    
+    subgraph Database_Layer ["Supabase Infrastructure"]
+        DB[("PostgreSQL DB (RLS Enabled)")]
+        Auth["Supabase Auth (JWT & Session validation)"]
+        Storage["Supabase Storage (Recordings Bucket)"]
+    end
+    
+    subgraph AI_Layer ["AI & Proctoring Analysis"]
+        MediaPipe["MediaPipe API (AI Cheating & Suspicious Alerts)"]
+    end
+    
+    %% Apply Styles
+    class Login,Diagnostics,ExamIntro,ExamAttempt,AdminDashboard,CreateExam client;
+    class Signaling,ProctorBackend server;
+    class DB,Auth,Storage database;
+    class MediaPipe thirdparty;
+    
+    %% Data Flow Connections
+    Login -->|Authenticate| Auth
+    Auth -->|User Session JWT| DB
+    Diagnostics -->|Verify media permissions| ExamAttempt
+    ExamAttempt -->|P2P Video Stream| Signaling
+    Signaling -->|Forward Live stream| AdminDashboard
+    
+    ExamAttempt -->|Screen Recording| Storage
+    ExamAttempt -->|Submit Exam Status| DB
+    
+    AdminDashboard -->|Fetch Live Streams| Signaling
+    AdminDashboard -->|Request Video Playback| Storage
+    AdminDashboard -->|Get Violation logs| DB
+    
+    %% AI Pipeline
+    ExamAttempt -->|Telemetry Events| MediaPipe
+    MediaPipe -->|Flag Violations| DB
+```
+
+### Student Flow
 1. 🔑 Log in via Google (Supabase Auth)
 2. 🧪 Pass hardware diagnostics & identity calibration
 3. ✍️ Attempt the exam — webcam stream + screen recording run continuously, questions load from Supabase, live timer counts down
 4. ☁️ On submit, the recording uploads to Cloudinary and the session is queued for AI review
 
-### Admin flow
+### Admin Flow
 - 🖥️ View every active exam session in real time
 - 📡 Watch live webcam streams per student
 - 🎬 Review uploaded screen recordings after the exam ends
