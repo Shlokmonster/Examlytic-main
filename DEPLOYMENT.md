@@ -150,30 +150,47 @@ Verify in Supabase Dashboard under **Edge Functions** that `rapid-task` is liste
 
 ---
 
-## PHASE 4: FRONTEND HOSTING DEPLOYMENT (VERCEL / NETLIFY)
+## PHASE 4: CLIENT-SIDE DEPLOYMENT ON NETLIFY
 
-### Environment Variables
-Configure the following environment variables in your hosting provider's project settings (e.g. Vercel Project Settings > Environment Variables):
+Examlytic is fully pre-configured for Netlify with [`netlify.toml`](file:///Users/shlokkadam/Developer/Examlytic-main/netlify.toml) and [`public/_redirects`](file:///Users/shlokkadam/Developer/Examlytic-main/public/_redirects).
 
-```ini
-VITE_SUPABASE_URL=https://<your-project-ref>.supabase.co
-VITE_SUPABASE_ANON_KEY=<your-supabase-anon-key>
-VITE_CLOUDINARY_CLOUD_NAME=<your-cloudinary-cloud-name>
-VITE_CLOUDINARY_UPLOUD_PRESET=<your-unsigned-upload-preset>
-VITE_GROQ_API_KEY=<your-groq-api-key>
-```
+### Step 1: Configure Environment Variables in Netlify
+In your [Netlify Dashboard](https://app.netlify.com/):
+1. Navigate to your site > **Site configuration** > **Environment variables**.
+2. Add the following variables (choose **All scopes / Production**):
 
-### Build & Output Settings
-- **Framework Preset:** Vite
-- **Build Command:** `npm run build`
-- **Output Directory:** `dist`
-- **Install Command:** `npm install`
-- **Node.js Version:** `18.x` or `20.x`
+| Key | Description | Source |
+|---|---|---|
+| `VITE_SUPABASE_URL` | Your Supabase Project URL | Supabase Dashboard > Settings > API |
+| `VITE_SUPABASE_ANON_KEY` | Your Supabase Anon public key | Supabase Dashboard > Settings > API |
+| `VITE_CLOUDINARY_CLOUD_NAME` | Cloudinary cloud name | Cloudinary Dashboard |
+| `VITE_CLOUDINARY_UPLOUD_PRESET` | Cloudinary unsigned preset | Cloudinary Settings > Upload > Upload Presets |
+| `VITE_GROQ_API_KEY` | Groq AI API Key | Groq Console |
 
-### Single Page Application (SPA) Routing Configuration
-Single-page React routing is already configured in the repository:
-- For **Vercel**: Handled automatically by [`vercel.json`](file:///Users/shlokkadam/Developer/Examlytic-main/vercel.json) rewrites.
-- For **Netlify / Cloudflare Pages**: Handled by [`public/_redirects`](file:///Users/shlokkadam/Developer/Examlytic-main/public/_redirects) (`/* /index.html 200`).
+### Step 2: Build & Deployment Settings
+Netlify will automatically detect [`netlify.toml`](file:///Users/shlokkadam/Developer/Examlytic-main/netlify.toml). Verify under **Build & deploy**:
+- **Base directory:** (leave empty / root)
+- **Build command:** `npm run build`
+- **Publish directory:** `dist`
+- **Node version:** `20` (set automatically in `netlify.toml`)
+
+### Step 3: Trigger the Netlify Deployment
+- **Via GitHub (Auto-Deploy):**
+  Once you push your code to the connected GitHub branch (e.g. `main` or `reliability-improvements`), Netlify automatically starts building and publishes the site.
+- **Via Netlify CLI (Manual Terminal Deploy):**
+  ```bash
+  # 1. Login to Netlify
+  npx netlify login
+
+  # 2. Build and deploy to production
+  npm run build
+  npx netlify deploy --prod --dir=dist
+  ```
+
+### Step 4: Verify Single Page App (SPA) Routing & Permissions
+The repository includes automated redirect rules so that:
+- Refreshing URLs like `/exam/:id` or navigating to `/admin` serves `index.html` without returning `404 Not Found`.
+- Camera, microphone, and display capture permissions are explicitly allowed by Netlify headers (`Permissions-Policy`) for seamless webcam proctoring.
 
 ---
 
@@ -254,3 +271,4 @@ DROP TRIGGER IF EXISTS trg_validate_exam_log_audit ON public.exam_logs;
 | Build Production App | `npm run build` |
 | Push Branch to GitHub | `git push -u origin reliability-improvements` |
 | Deploy Edge Function | `supabase functions deploy rapid-task --project-ref <project-id>` |
+
