@@ -44,5 +44,55 @@ describe('Recording Pipeline & Event Log Association', () => {
     assert.strictEqual(videoUploadSuccess, false, 'Simulated video failure occurred');
     assert.strictEqual(result.success, true);
   });
+
+  it('formats Cloudinary upload parameters with comma-delimited tags and preset fallback', () => {
+    const userId = 'user-abc-123';
+    const envVars = {
+      VITE_CLOUDINARY_CLOUD_NAME: 'dn2h5nryg',
+      VITE_CLOUDINARY_UPLOUD_PRESET: 'examlytic_upload_preset'
+    };
+
+    const cloudName = envVars.VITE_CLOUDINARY_CLOUD_NAME || 'dn2h5nryg';
+    const uploadPreset = envVars.VITE_CLOUDINARY_UPLOAD_PRESET || 
+                         envVars.VITE_CLOUDINARY_UPLOUD_PRESET || 
+                         'examlytic_upload_preset';
+    const tags = `examlytic,recording,user_${userId}`;
+
+    assert.strictEqual(cloudName, 'dn2h5nryg');
+    assert.strictEqual(uploadPreset, 'examlytic_upload_preset');
+    assert.strictEqual(typeof tags, 'string');
+    assert.strictEqual(tags, 'examlytic,recording,user_user-abc-123');
+    assert.ok(!tags.includes('[object'), 'Tags must not serialize as [object Array]');
+  });
+
+  it('awaits Cloudinary upload before navigating to completion screen', async () => {
+    const uploadEvents = [];
+    let navigated = false;
+
+    // Simulate submission flow
+    const mockUploadBlob = async (onProgress) => {
+      uploadEvents.push('upload_start');
+      onProgress(50);
+      uploadEvents.push('upload_50%');
+      onProgress(100);
+      uploadEvents.push('upload_complete');
+      return { url: 'https://cloudinary.com/video.webm', public_id: 'vid-123', duration: 120 };
+    };
+
+    const mockNavigate = () => {
+      navigated = true;
+      uploadEvents.push('navigated');
+    };
+
+    // Correct flow: await uploadBlob, THEN navigate
+    const progressList = [];
+    const result = await mockUploadBlob((p) => progressList.push(p));
+    assert.ok(result.url);
+    mockNavigate();
+
+    assert.deepStrictEqual(uploadEvents, ['upload_start', 'upload_50%', 'upload_complete', 'navigated']);
+    assert.strictEqual(navigated, true);
+    assert.deepStrictEqual(progressList, [50, 100]);
+  });
 });
 

@@ -626,9 +626,38 @@ FACE_NOT_FOUND: 0,
       const expiredList = [];
       const completedList = [];
 
+      // Pre-calculate set of (student_id + '_' + exam_id) that are already completed or submitted
+      const completedStudentExamKeys = new Set();
+      attemptsWithUser.forEach(a => {
+        const isDone = Boolean(a.submitted_at) || 
+          Boolean(a.completed_at) || 
+          a.status === 'completed' || 
+          a.status === 'submitted';
+        if (isDone && a.student_id && a.exam_id) {
+          completedStudentExamKeys.add(`${a.student_id}_${a.exam_id}`);
+        }
+      });
+
       attemptsWithUser.forEach(attempt => {
-        if (attempt.submitted_at !== null || attempt.completed_at !== null || attempt.status === 'completed') {
+        const isDirectlyCompleted = Boolean(attempt.submitted_at) || 
+          Boolean(attempt.completed_at) || 
+          attempt.status === 'completed' || 
+          attempt.status === 'submitted';
+
+        if (isDirectlyCompleted) {
           completedList.push(attempt);
+          return;
+        }
+
+        // If the attempt is abandoned, cancelled, or archived, do not show in active or interrupted monitoring
+        if (attempt.status === 'abandoned' || attempt.status === 'cancelled' || attempt.status === 'archived') {
+          return;
+        }
+
+        // If this student already has a submitted/completed attempt for this exam,
+        // do not categorize older/stale unsubmitted attempts as interrupted or active
+        const pairKey = `${attempt.student_id}_${attempt.exam_id}`;
+        if (completedStudentExamKeys.has(pairKey)) {
           return;
         }
 

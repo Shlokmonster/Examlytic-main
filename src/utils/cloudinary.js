@@ -8,7 +8,9 @@ export const uploadToCloudinary = (file, userId, folder = 'examlytic/recordings'
   return new Promise((resolve, reject) => {
     try {
       const cloudName = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME || 'dn2h5nryg';
-      const uploadPreset = import.meta.env.VITE_CLOUDINARY_UPLOUD_PRESET || 'examlytic_upload_preset';
+      const uploadPreset = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET || 
+                           import.meta.env.VITE_CLOUDINARY_UPLOUD_PRESET || 
+                           'examlytic_upload_preset';
       
       console.log('Using Cloudinary config:', { cloudName, uploadPreset, folder });
 
@@ -28,7 +30,7 @@ export const uploadToCloudinary = (file, userId, folder = 'examlytic/recordings'
       formData.append('folder', folder);
       formData.append('resource_type', 'video');
       formData.append('public_id', `exam_${Date.now()}_${userId}`);
-      formData.append('tags', ['examlytic', 'recording', `user_${userId}`]);
+      formData.append('tags', `examlytic,recording,user_${userId}`);
 
       const xhr = new XMLHttpRequest();
       xhr.open('POST', uploadUrl, true);

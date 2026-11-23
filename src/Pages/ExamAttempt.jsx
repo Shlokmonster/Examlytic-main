@@ -465,9 +465,9 @@ export default function ExamAttempt() {
   const [recordingBlob, setRecordingBlob] = useState(null);
   const [_isRecording, setIsRecording] = useState(false);
   const [_recordingReady, setRecordingReady] = useState(false);
-  const [uploadProgress, _setUploadProgress] = useState(0);
-  const [isUploading, _setIsUploading] = useState(false);
-  const [uploadWarning, _setUploadWarning] = useState(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadWarning, setUploadWarning] = useState(null);
 
   const {
     status,
@@ -1670,6 +1670,14 @@ export default function ExamAttempt() {
         
         const stopPromise = new Promise((resolve) => {
           onStopResolver.current = resolve;
+          // Safety timeout in case onStop event is delayed
+          setTimeout(() => {
+            if (onStopResolver.current) {
+              console.warn('stopRecording timeout elapsed (5s), proceeding with existing recordingBlob');
+              resolve(recordingBlob);
+              onStopResolver.current = null;
+            }
+          }, 5000);
         });
         
         stopRecording();
@@ -1723,37 +1731,56 @@ export default function ExamAttempt() {
         currentAttemptId = inserted.id;
       }
 
-      // 3. Initiate Cloudinary video recording upload asynchronously in background
+      // 2. Upload video recording to Cloudinary with real-time feedback
+      let uploadWarningMsg = null;
       if (blobToUpload && currentAttemptId) {
         const savedAttemptId = currentAttemptId;
         const savedUserId = user.id;
-        console.log('Initiating background recording upload for attempt:', savedAttemptId);
-        uploadBlob(blobToUpload, savedUserId)
-          .then(async (uploadResult) => {
-            if (uploadResult?.url) {
-              await supabase
-                .from('exam_attempts')
-                .update({
-                  recording_url: uploadResult.url,
-                  cloudinary_public_id: uploadResult.public_id,
-                  recording_duration: uploadResult.duration
-                })
-                .eq('id', savedAttemptId);
-              console.log('Background recording updated successfully');
-            }
-          })
-          .catch(err => {
-            console.warn('Background recording upload notice (non-fatal):', err);
+        console.log('Uploading proctoring recording for attempt:', savedAttemptId);
+        setIsUploading(true);
+        setUploadProgress(0);
+
+        try {
+          const uploadPromise = uploadBlob(blobToUpload, savedUserId, (percent) => {
+            setUploadProgress(percent);
           });
+
+          // Timeout safety: 45 seconds max
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Recording upload timed out after 45 seconds')), 45000)
+          );
+
+          const uploadResult = await Promise.race([uploadPromise, timeoutPromise]);
+
+          if (uploadResult?.url) {
+            console.log('Recording uploaded successfully to Cloudinary:', uploadResult.url);
+            setRecordingUrl(uploadResult.url);
+            await supabase
+              .from('exam_attempts')
+              .update({
+                recording_url: uploadResult.url,
+                cloudinary_public_id: uploadResult.public_id,
+                recording_duration: uploadResult.duration || 0
+              })
+              .eq('id', savedAttemptId);
+            console.log('Exam attempt successfully updated with recording URL');
+          }
+        } catch (uploadErr) {
+          console.warn('Recording upload notice (non-fatal):', uploadErr);
+          uploadWarningMsg = 'Screen recording upload could not complete due to network limits, but your answers were submitted successfully.';
+          setUploadWarning(uploadWarningMsg);
+        } finally {
+          setIsUploading(false);
+        }
       }
 
-      // 4. Log completion event
+      // 3. Log completion event
       logExamEvent(examId, user.id, isExpired ? 'EXAM_EXPIRED' : 'EXAM_SUBMITTED', {
         score: finalScore,
         totalQuestions: questions.length
       });
 
-      // 5. Mark older unsubmitted duplicate attempts as abandoned (never delete records)
+      // 4. Mark older unsubmitted duplicate attempts as abandoned (never delete records)
       if (currentAttemptId) {
         supabase
           .from('exam_attempts')
@@ -1767,7 +1794,7 @@ export default function ExamAttempt() {
           });
       }
 
-      // Navigate to the done page with the current state
+      // 5. Navigate to the done page with the current state
       navigate(`/exam/${examId}/done`, {
         state: {
           examId,
@@ -1775,7 +1802,7 @@ export default function ExamAttempt() {
           questions: questions, // Use the questions from state
           score: finalScore,
           totalQuestions: questions.length,
-          warning: uploadWarning,
+          warning: uploadWarningMsg || uploadWarning,
         }
       });
       
@@ -1936,8 +1963,8 @@ export default function ExamAttempt() {
           background: #f8fafc !important;
           margin: 0;
           padding: 0;
-          font-family: 'Inter', -apple-system, sans-serif;
-          color: #1e293b;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+          color: #0f172a;
         }
         .exam-workspace-new {
           min-height: 100vh;
@@ -1949,35 +1976,85 @@ export default function ExamAttempt() {
           display: flex;
           justify-content: space-between;
           align-items: center;
-          padding: 16px 40px;
-          background: #fff;
+          padding: 14px 36px;
+          background: rgba(255, 255, 255, 0.95);
+          backdrop-filter: blur(16px);
+          -webkit-backdrop-filter: blur(16px);
           border-bottom: 1px solid #e2e8f0;
           position: sticky;
           top: 0;
           z-index: 100;
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
         }
         .header-brand {
           display: flex;
           align-items: center;
-          gap: 15px;
+          gap: 14px;
+        }
+        .brand-logo-badge {
+          width: 36px;
+          height: 36px;
+          border-radius: 10px;
+          background: linear-gradient(135deg, #4f46e5 0%, #06b6d4 100%);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #ffffff;
+          box-shadow: 0 2px 6px rgba(79, 70, 229, 0.25);
+        }
+        .brand-info-stack {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+        .brand-name-row {
+          display: flex;
+          align-items: center;
+          gap: 8px;
         }
         .brand-name {
-          font-size: 22px;
+          font-size: 19px;
           font-weight: 800;
-          color: #3b82f6;
-          letter-spacing: -0.5px;
+          color: #0f172a;
+          letter-spacing: -0.4px;
+        }
+        .proctor-live-tag {
+          font-size: 10px;
+          font-weight: 700;
+          color: #059669;
+          background: #ecfdf5;
+          border: 1px solid #a7f3d0;
+          padding: 2px 7px;
+          border-radius: 100px;
+          letter-spacing: 0.5px;
+          text-transform: uppercase;
         }
         .brand-divider {
           width: 1px;
-          height: 20px;
-          background: #cbd5e1;
+          height: 24px;
+          background: #e2e8f0;
+        }
+        .exam-meta-wrap {
+          display: flex;
+          align-items: center;
+          gap: 10px;
         }
         .exam-title-display {
-          font-size: 13px;
+          font-size: 14px;
           font-weight: 700;
-          color: #64748b;
-          letter-spacing: 0.5px;
-          text-transform: uppercase;
+          color: #334155;
+          max-width: 380px;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .exam-subject-badge {
+          font-size: 11px;
+          font-weight: 600;
+          color: #4f46e5;
+          background: #eef2ff;
+          padding: 3px 8px;
+          border-radius: 6px;
         }
         .header-controls {
           display: flex;
@@ -1988,42 +2065,64 @@ export default function ExamAttempt() {
           display: flex;
           align-items: center;
           gap: 8px;
-          background: #f1f5f9;
-          color: #334155;
-          padding: 8px 16px;
-          border-radius: 8px;
-          font-family: monospace;
+          background: #ffffff;
+          color: #1e293b;
+          padding: 8px 18px;
+          border-radius: 10px;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
           font-size: 16px;
           font-weight: 700;
-          border: 1px solid #e2e8f0;
+          border: 1.5px solid #e2e8f0;
+          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+          transition: all 0.25s ease;
+        }
+        .timer-warning {
+          background: #fffbeb;
+          color: #b45309;
+          border-color: #fde68a;
+        }
+        .timer-critical {
+          background: #fef2f2;
+          color: #dc2626;
+          border-color: #fecaca;
+          animation: timerPulse 1s infinite alternate;
+        }
+        @keyframes timerPulse {
+          0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.4); }
+          100% { transform: scale(1.02); box-shadow: 0 0 0 6px rgba(220, 38, 38, 0); }
         }
         .finish-exam-btn {
-          background: #4f46e5;
-          color: #fff;
+          background: linear-gradient(135deg, #4f46e5 0%, #4338ca 100%);
+          color: #ffffff;
           border: none;
-          border-radius: 8px;
-          padding: 10px 20px;
+          border-radius: 10px;
+          padding: 10px 22px;
           font-weight: 600;
           font-size: 14px;
           cursor: pointer;
-          transition: all 0.2s ease;
-          box-shadow: 0 2px 4px rgba(79, 70, 229, 0.15);
+          transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+          box-shadow: 0 2px 6px rgba(79, 70, 229, 0.25);
         }
         .finish-exam-btn:hover {
-          background: #4338ca;
-          box-shadow: 0 4px 8px rgba(79, 70, 229, 0.25);
+          background: linear-gradient(135deg, #4338ca 0%, #3730a3 100%);
+          box-shadow: 0 4px 12px rgba(79, 70, 229, 0.35);
+          transform: translateY(-1px);
+        }
+        .finish-exam-btn:active {
+          transform: translateY(0);
         }
         .finish-exam-btn:disabled {
           background: #94a3b8;
           cursor: not-allowed;
           box-shadow: none;
+          transform: none;
         }
         .exam-grid-new {
           display: grid;
-          grid-template-columns: 280px 1fr 280px;
+          grid-template-columns: 290px 1fr 290px;
           gap: 24px;
-          padding: 24px 40px;
-          max-width: 1440px;
+          padding: 24px 36px;
+          max-width: 1520px;
           margin: 0 auto;
           width: 100%;
           box-sizing: border-box;
@@ -2034,34 +2133,42 @@ export default function ExamAttempt() {
           gap: 20px;
         }
         .sidebar-card {
-          background: #fff;
-          border-radius: 12px;
+          background: #ffffff;
+          border-radius: 14px;
           border: 1px solid #e2e8f0;
           padding: 20px;
-          box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
         }
         .sidebar-card-title {
-          font-size: 11px;
-          font-weight: 800;
+          font-size: 12px;
+          font-weight: 700;
           color: #64748b;
-          letter-spacing: 1px;
+          letter-spacing: 0.8px;
           text-transform: uppercase;
           margin-bottom: 16px;
           display: flex;
           align-items: center;
-          gap: 8px;
+          justify-content: space-between;
+        }
+        .palette-stats-badge {
+          font-size: 11px;
+          color: #4f46e5;
+          background: #eef2ff;
+          padding: 2px 8px;
+          border-radius: 6px;
+          font-weight: 700;
         }
         .webcam-card-new {
           position: relative;
-          border-radius: 12px;
+          border-radius: 14px;
           overflow: hidden;
-          background: #f1f5f9;
+          background: #0f172a;
           aspect-ratio: 4/3;
           display: flex;
           align-items: center;
           justify-content: center;
           border: 1px solid #e2e8f0;
-          box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
         }
         .webcam-video {
           width: 100%;
@@ -2079,24 +2186,47 @@ export default function ExamAttempt() {
           z-index: 5;
           transform: scaleX(-1);
         }
-        .webcam-placeholder {
+        .webcam-live-badge {
+          position: absolute;
+          top: 10px;
+          left: 10px;
           display: flex;
-          flex-direction: column;
           align-items: center;
-          gap: 8px;
-          color: #94a3b8;
+          gap: 6px;
+          background: rgba(15, 23, 42, 0.75);
+          color: #ffffff;
+          font-size: 10px;
+          font-weight: 700;
+          padding: 4px 9px;
+          border-radius: 100px;
+          backdrop-filter: blur(6px);
+          letter-spacing: 0.4px;
+          z-index: 10;
+        }
+        .pulse-dot {
+          width: 7px;
+          height: 7px;
+          border-radius: 50%;
+          background: #10b981;
+          box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.35);
+          animation: pulseGreen 1.6s infinite;
+        }
+        @keyframes pulseGreen {
+          0% { transform: scale(1); opacity: 1; }
+          50% { transform: scale(1.3); opacity: 0.7; }
+          100% { transform: scale(1); opacity: 1; }
         }
         .webcam-timestamp {
           position: absolute;
-          bottom: 8px;
-          left: 8px;
+          bottom: 10px;
+          left: 10px;
           background: rgba(15, 23, 42, 0.75);
-          color: #fff;
-          font-family: monospace;
+          color: #ffffff;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
           font-size: 11px;
-          padding: 4px 8px;
-          border-radius: 4px;
-          backdrop-filter: blur(4px);
+          padding: 3px 8px;
+          border-radius: 6px;
+          backdrop-filter: blur(6px);
           pointer-events: none;
           z-index: 10;
         }
@@ -2112,38 +2242,46 @@ export default function ExamAttempt() {
           display: flex;
           align-items: center;
           justify-content: center;
-          background: #fff;
+          background: #ffffff;
           border: 1.5px solid #e2e8f0;
-          border-radius: 8px;
+          border-radius: 10px;
           font-size: 14px;
           font-weight: 600;
           color: #334155;
           cursor: pointer;
-          transition: all 0.2s ease;
+          transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
         }
         .q-num-btn:hover {
-          border-color: #94a3b8;
+          border-color: #cbd5e1;
           background: #f8fafc;
+          transform: translateY(-1px);
         }
         .q-num-btn.active {
           border-color: #4f46e5;
+          background: #eef2ff;
           color: #4f46e5;
           border-width: 2px;
           font-weight: 700;
+          box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.12);
         }
         .q-num-btn.answered {
           background: #4f46e5;
           border-color: #4f46e5;
-          color: #fff;
+          color: #ffffff;
         }
         .q-num-btn.flagged {
-          background: #f5f3ff;
-          border-color: #c084fc;
-          color: #7e22ce;
+          background: #fdf4ff;
+          border-color: #d8b4fe;
+          color: #9333ea;
+        }
+        .q-num-btn.answered.flagged {
+          background: linear-gradient(135deg, #4f46e5 0%, #9333ea 100%);
+          border-color: #9333ea;
+          color: #ffffff;
         }
         .completion-container {
           border-top: 1px solid #f1f5f9;
-          padding-top: 15px;
+          padding-top: 16px;
         }
         .completion-label-row {
           display: flex;
@@ -2151,24 +2289,25 @@ export default function ExamAttempt() {
           font-size: 12px;
           font-weight: 700;
           color: #475569;
-          margin-bottom: 6px;
+          margin-bottom: 8px;
         }
         .completion-bar-bg {
           width: 100%;
-          height: 6px;
+          height: 7px;
           background: #f1f5f9;
-          border-radius: 3px;
+          border-radius: 10px;
           overflow: hidden;
         }
         .completion-bar-fill {
           height: 100%;
-          background: #4f46e5;
-          transition: width 0.3s ease;
+          background: linear-gradient(90deg, #4f46e5 0%, #06b6d4 100%);
+          border-radius: 10px;
+          transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
         .integrity-card-new {
-          background: #f0fdf4;
+          background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
           border: 1px solid #bbf7d0;
-          border-radius: 12px;
+          border-radius: 14px;
           padding: 16px;
           display: flex;
           flex-direction: column;
@@ -2184,84 +2323,123 @@ export default function ExamAttempt() {
         }
         .integrity-subtext {
           font-size: 11px;
-          line-height: 1.4;
+          line-height: 1.45;
           color: #15803d;
         }
         .question-workspace-card {
-          background: #fff;
-          border-radius: 12px;
+          background: #ffffff;
+          border-radius: 16px;
           border: 1px solid #e2e8f0;
-          padding: 30px;
-          box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+          padding: 32px 36px;
+          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.03);
           display: flex;
           flex-direction: column;
-          min-height: 480px;
+          min-height: 520px;
         }
         .workspace-header {
           display: flex;
           justify-content: space-between;
           align-items: center;
-          margin-bottom: 20px;
+          margin-bottom: 22px;
         }
         .question-index-pill {
-          background: #f5f3ff;
-          color: #7e22ce;
+          background: #eef2ff;
+          color: #4338ca;
           font-size: 12px;
           font-weight: 700;
           padding: 6px 14px;
           border-radius: 100px;
-          border: 1px solid #e9d5ff;
+          border: 1px solid #e0e7ff;
+          letter-spacing: 0.3px;
         }
         .flag-review-toggle {
           display: flex;
           align-items: center;
-          gap: 6px;
+          gap: 7px;
           font-size: 13px;
           font-weight: 600;
           color: #64748b;
-          background: none;
-          border: none;
+          background: #f8fafc;
+          border: 1px solid #e2e8f0;
+          border-radius: 8px;
+          padding: 6px 12px;
           cursor: pointer;
-          transition: color 0.2s ease;
+          transition: all 0.2s ease;
         }
         .flag-review-toggle:hover {
           color: #334155;
+          background: #f1f5f9;
         }
         .flag-review-toggle.flagged {
-          color: #7e22ce;
+          background: #fdf4ff;
+          border-color: #d8b4fe;
+          color: #9333ea;
         }
         .question-body-text {
           font-size: 18px;
-          font-weight: 700;
-          line-height: 1.45;
+          font-weight: 650;
+          line-height: 1.55;
           color: #0f172a;
-          margin-bottom: 24px;
+          margin-bottom: 26px;
         }
         .options-stack {
           display: flex;
           flex-direction: column;
-          gap: 12px;
-          margin-bottom: 30px;
+          gap: 13px;
+          margin-bottom: 32px;
           flex: 1;
         }
         .custom-option-card {
           display: flex;
           align-items: center;
-          gap: 14px;
-          background: #fff;
+          gap: 16px;
+          background: #ffffff;
           border: 1.5px solid #e2e8f0;
           border-radius: 12px;
           padding: 16px 20px;
           cursor: pointer;
-          transition: all 0.2s ease;
+          transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
         }
         .custom-option-card:hover {
-          border-color: #cbd5e1;
-          background: #f8fafc;
+          border-color: #a5b4fc;
+          background: #faf5ff;
+          transform: translateY(-1px);
         }
         .custom-option-card.selected {
-          background: #f5f3ff;
-          border-color: #8b5cf6;
+          background: linear-gradient(135deg, #eef2ff 0%, #f5f3ff 100%);
+          border-color: #6366f1;
+          box-shadow: 0 2px 8px rgba(99, 102, 241, 0.12);
+        }
+        .option-letter-badge {
+          width: 32px;
+          height: 32px;
+          border-radius: 8px;
+          background: #f1f5f9;
+          border: 1px solid #e2e8f0;
+          color: #475569;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-weight: 700;
+          font-size: 13px;
+          flex-shrink: 0;
+          transition: all 0.2s ease;
+        }
+        .custom-option-card.selected .option-letter-badge {
+          background: #4f46e5;
+          border-color: #4f46e5;
+          color: #ffffff;
+        }
+        .option-text-display {
+          font-size: 15px;
+          font-weight: 500;
+          color: #334155;
+          flex: 1;
+          line-height: 1.45;
+        }
+        .custom-option-card.selected .option-text-display {
+          color: #0f172a;
+          font-weight: 600;
         }
         .custom-radio-circle {
           width: 20px;
@@ -2275,92 +2453,91 @@ export default function ExamAttempt() {
           transition: all 0.2s ease;
         }
         .custom-option-card.selected .custom-radio-circle {
-          border-color: #8b5cf6;
+          border-color: #4f46e5;
         }
         .custom-radio-inner {
           width: 10px;
           height: 10px;
           border-radius: 50%;
-          background: #8b5cf6;
-        }
-        .option-text-display {
-          font-size: 15px;
-          font-weight: 500;
-          color: #334155;
-        }
-        .custom-option-card.selected .option-text-display {
-          color: #1e1b4b;
-          font-weight: 600;
+          background: #4f46e5;
         }
         .custom-textarea-answer {
           width: 100%;
-          min-height: 150px;
+          min-height: 160px;
           border-radius: 12px;
           border: 1.5px solid #e2e8f0;
-          background: #fff;
+          background: #ffffff;
           font-size: 15px;
-          padding: 14px;
+          padding: 16px;
           box-sizing: border-box;
           resize: vertical;
           transition: all 0.2s ease;
           margin-bottom: 30px;
           flex: 1;
+          font-family: inherit;
         }
         .custom-textarea-answer:focus {
-          border-color: #8b5cf6;
+          border-color: #6366f1;
           outline: none;
-          box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.1);
+          box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
         }
         .navigation-bar-new {
           display: flex;
           justify-content: space-between;
           align-items: center;
-          padding-top: 20px;
+          padding-top: 22px;
           border-top: 1px solid #f1f5f9;
         }
         .nav-text-btn {
           display: flex;
           align-items: center;
           gap: 8px;
-          background: none;
-          border: none;
+          background: #ffffff;
+          border: 1.5px solid #e2e8f0;
+          border-radius: 10px;
           color: #475569;
           font-size: 14px;
           font-weight: 600;
+          padding: 9px 18px;
           cursor: pointer;
-          transition: color 0.2s ease;
+          transition: all 0.2s ease;
         }
-        .nav-text-btn:hover {
-          color: #1e293b;
+        .nav-text-btn:hover:not(:disabled) {
+          border-color: #cbd5e1;
+          background: #f8fafc;
+          color: #0f172a;
         }
         .nav-text-btn:disabled {
           color: #cbd5e1;
+          border-color: #f1f5f9;
           cursor: not-allowed;
+          background: #f8fafc;
         }
         .next-question-btn {
           display: flex;
           align-items: center;
           gap: 8px;
-          background: #4f46e5;
-          color: #fff;
+          background: linear-gradient(135deg, #4f46e5 0%, #4338ca 100%);
+          color: #ffffff;
           border: none;
-          border-radius: 8px;
-          padding: 10px 20px;
+          border-radius: 10px;
+          padding: 10px 22px;
           font-weight: 600;
           font-size: 14px;
           cursor: pointer;
-          transition: all 0.2s ease;
-          box-shadow: 0 2px 4px rgba(79, 70, 229, 0.15);
+          transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+          box-shadow: 0 2px 6px rgba(79, 70, 229, 0.25);
         }
         .next-question-btn:hover {
-          background: #4338ca;
-          box-shadow: 0 4px 8px rgba(79, 70, 229, 0.25);
+          background: linear-gradient(135deg, #4338ca 0%, #3730a3 100%);
+          box-shadow: 0 4px 12px rgba(79, 70, 229, 0.35);
+          transform: translateY(-1px);
         }
         .tool-box-inner {
           background: #f8fafc;
           border: 1px solid #e2e8f0;
-          border-radius: 8px;
-          padding: 12px;
+          border-radius: 10px;
+          padding: 14px;
           margin-bottom: 16px;
         }
         .tool-box-inner:last-child {
@@ -2373,30 +2550,31 @@ export default function ExamAttempt() {
           margin-bottom: 8px;
         }
         .tool-formula {
-          font-family: monospace;
-          font-size: 11px;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+          font-size: 12px;
           color: #2563eb;
           background: #eff6ff;
-          padding: 8px 12px;
-          border-radius: 6px;
+          padding: 10px 14px;
+          border-radius: 8px;
           border: 1px solid #dbeafe;
           overflow-x: auto;
           white-space: nowrap;
         }
         .scratchpad-area {
           width: 100%;
-          height: 90px;
-          border: 1px solid #cbd5e1;
-          border-radius: 6px;
-          background: #fff;
-          padding: 8px;
+          height: 100px;
+          border: 1px solid #e2e8f0;
+          border-radius: 8px;
+          background: #ffffff;
+          padding: 10px;
           font-size: 12px;
           box-sizing: border-box;
-          resize: none;
+          resize: vertical;
           font-family: inherit;
+          color: #334155;
         }
         .scratchpad-area:focus {
-          border-color: #8b5cf6;
+          border-color: #6366f1;
           outline: none;
         }
         .stats-list-new {
@@ -2423,11 +2601,15 @@ export default function ExamAttempt() {
           border-radius: 50%;
         }
         .stat-dot.red { background: #ef4444; }
-        .stat-dot.purple { background: #a855f7; }
-        .stat-dot.blue { background: #3b82f6; }
+        .stat-dot.purple { background: #9333ea; }
+        .stat-dot.blue { background: #4f46e5; }
         .stat-count-value {
           font-weight: 700;
-          color: #1e293b;
+          color: #0f172a;
+          background: #f1f5f9;
+          padding: 2px 8px;
+          border-radius: 6px;
+          font-size: 12px;
         }
         .proctoring-alerts {
           position: fixed;
@@ -2439,13 +2621,13 @@ export default function ExamAttempt() {
         .alert {
           padding: 12px 16px;
           margin-bottom: 10px;
-          border-radius: 8px;
+          border-radius: 10px;
           display: flex;
           align-items: center;
-          background: #fff3cd;
-          color: #856404;
-          box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-          border: 1px solid #ffeeba;
+          background: #fffbeb;
+          color: #92400e;
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+          border: 1px solid #fef3c7;
           font-size: 13px;
         }
         .alert svg {
@@ -2457,7 +2639,7 @@ export default function ExamAttempt() {
           margin-left: auto;
           font-size: 11px;
         }
-        @media (max-width: 992px) {
+        @media (max-width: 1080px) {
           .exam-grid-new {
             grid-template-columns: 1fr;
             padding: 16px;
@@ -2471,14 +2653,25 @@ export default function ExamAttempt() {
       {/* Header bar */}
       <header className="exam-header-new">
         <div className="header-brand">
-          <span className="brand-name">Examlytic</span>
+          <div className="brand-logo-badge">
+            <FaLock size={16} />
+          </div>
+          <div className="brand-info-stack">
+            <div className="brand-name-row">
+              <span className="brand-name">Examlytic</span>
+              <span className="proctor-live-tag">Active Proctor</span>
+            </div>
+          </div>
           <div className="brand-divider" />
-          <span className="exam-title-display">
-            {exam ? `${exam.title} - ${exam.subject || 'MIDTERM'}` : 'EXAM WORKSPACE'}
-          </span>
+          <div className="exam-meta-wrap">
+            <span className="exam-title-display">
+              {exam?.title || 'Midterm Assessment'}
+            </span>
+            {exam?.subject && <span className="exam-subject-badge">{exam.subject}</span>}
+          </div>
         </div>
         <div className="header-controls">
-          <div className="timer-pill">
+          <div className={`timer-pill ${timeLeft < 60 ? 'timer-critical' : timeLeft < 300 ? 'timer-warning' : ''}`}>
             <span>⏱️</span>
             <span>{hours !== '00' ? `${hours}:${minutes}:${seconds}` : `${minutes}:${seconds}`}</span>
           </div>
@@ -2500,6 +2693,10 @@ export default function ExamAttempt() {
           <div className="webcam-card-new">
             <video ref={videoRef} autoPlay muted playsInline className="webcam-video" />
             <canvas ref={canvasRef} className="webcam-canvas" />
+            <div className="webcam-live-badge">
+              <span className="pulse-dot" />
+              <span>LIVE PROCTOR FEED</span>
+            </div>
             <div className="webcam-timestamp">
               {formatDateTime(currentDateTime)}
             </div>
@@ -2508,7 +2705,10 @@ export default function ExamAttempt() {
           {/* Exam Progress Card */}
           <div className="sidebar-card">
             <div className="sidebar-card-title">
-              Exam Progress
+              <span>Question Palette</span>
+              <span className="palette-stats-badge">
+                {questions.filter(q => answers[q.id]).length}/{questions.length} Answered
+              </span>
             </div>
             <div className="question-grid-new">
               {questions.map((q, idx) => {
@@ -2534,7 +2734,7 @@ export default function ExamAttempt() {
             </div>
             <div className="completion-container">
               <div className="completion-label-row">
-                <span>Completion</span>
+                <span>Overall Completion</span>
                 <span>
                   {questions.length > 0 
                     ? Math.round((questions.filter(q => answers[q.id]).length / questions.length) * 100) 
@@ -2561,7 +2761,7 @@ export default function ExamAttempt() {
               <span>Integrity Shield Active</span>
             </div>
             <div className="integrity-subtext">
-              Your session is being monitored for professional certification compliance.
+              Real-time video, screen activity, and audio compliance monitoring are strictly enabled.
             </div>
           </div>
         </section>
@@ -2570,7 +2770,7 @@ export default function ExamAttempt() {
         <section className="question-workspace-card">
           <div className="workspace-header">
             <div className="question-index-pill">
-              Question {currentQuestionIndex + 1} of {questions.length}
+              QUESTION {currentQuestionIndex + 1} OF {questions.length}
             </div>
             <button 
               className={`flag-review-toggle ${flaggedQuestions[currentQuestion.id] ? 'flagged' : ''}`}
@@ -2580,7 +2780,7 @@ export default function ExamAttempt() {
               }))}
             >
               {flaggedQuestions[currentQuestion.id] ? <FaFlag /> : <FaRegFlag />}
-              <span>Flag for review</span>
+              <span>{flaggedQuestions[currentQuestion.id] ? 'Flagged for Review' : 'Flag for Review'}</span>
             </button>
           </div>
 
@@ -2608,10 +2808,11 @@ export default function ExamAttempt() {
                     className={`custom-option-card ${selected ? 'selected' : ''}`}
                     onClick={() => handleOptionChange(currentQuestion.id, letter)}
                   >
+                    <div className="option-letter-badge">{letter}</div>
+                    <span className="option-text-display">{opt}</span>
                     <div className="custom-radio-circle">
                       {selected && <div className="custom-radio-inner" />}
                     </div>
-                    <span className="option-text-display">{opt}</span>
                   </div>
                 );
               })}
@@ -2619,7 +2820,7 @@ export default function ExamAttempt() {
           ) : (
             <textarea
               className="custom-textarea-answer"
-              placeholder="Type your notes or answer details here..."
+              placeholder="Type your notes or response details here..."
               value={answers[currentQuestion.id] || ''}
               onChange={e => handleOptionChange(currentQuestion.id, e.target.value)}
             />
@@ -2644,7 +2845,7 @@ export default function ExamAttempt() {
               }))}
             >
               <FaRegFlag />
-              <span>Review Later</span>
+              <span>{flaggedQuestions[currentQuestion.id] ? 'Unflag Question' : 'Review Later'}</span>
             </button>
 
             <button 
@@ -2662,8 +2863,10 @@ export default function ExamAttempt() {
           {/* Reference Tools Card */}
           <div className="sidebar-card">
             <div className="sidebar-card-title">
-              <FaCalculator />
-              <span>Reference Tools</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <FaCalculator />
+                <span>Reference Tools</span>
+              </span>
             </div>
             
             <div className="tool-box-inner">
@@ -2677,7 +2880,7 @@ export default function ExamAttempt() {
               <div className="tool-box-title">Scratchpad</div>
               <textarea 
                 className="scratchpad-area"
-                placeholder="Type your notes here..."
+                placeholder="Type your scratch notes here..."
                 value={notes}
                 onChange={e => setNotes(e.target.value)}
               />
@@ -2687,16 +2890,16 @@ export default function ExamAttempt() {
           {/* Quick Navigation Card */}
           <div className="sidebar-card">
             <div className="sidebar-card-title">
-              Quick Navigation
+              <span>Exam Summary</span>
             </div>
             <div className="stats-list-new">
               <div className="stat-row-new">
                 <div className="stat-label-with-dot">
-                  <div className="stat-dot red" />
-                  <span>Unanswered</span>
+                  <div className="stat-dot blue" />
+                  <span>Attempted</span>
                 </div>
                 <span className="stat-count-value">
-                  {questions.filter(q => !answers[q.id]).length}
+                  {questions.filter(q => answers[q.id]).length}
                 </span>
               </div>
               <div className="stat-row-new">
@@ -2710,11 +2913,11 @@ export default function ExamAttempt() {
               </div>
               <div className="stat-row-new">
                 <div className="stat-label-with-dot">
-                  <div className="stat-dot blue" />
-                  <span>Attempted</span>
+                  <div className="stat-dot red" />
+                  <span>Unanswered</span>
                 </div>
                 <span className="stat-count-value">
-                  {questions.filter(q => answers[q.id]).length}
+                  {questions.filter(q => !answers[q.id]).length}
                 </span>
               </div>
             </div>
