@@ -12,10 +12,16 @@ import {
   FaHeadset, 
   FaArrowRight,
   FaLock,
-  FaCheckCircle
+  FaCheckCircle,
+  FaTimesCircle
 } from 'react-icons/fa';
 import "../ExamCode.css";
 import Navbar from "../Components/common/Navbar";
+
+const isValidUUID = (uuid) => {
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  return Boolean(uuid && uuidRegex.test(uuid));
+};
 
 function Examcode() {
     const [examCode, setExamCode] = useState('');
@@ -28,8 +34,13 @@ function Examcode() {
         setError('');
         const trimmedCode = examCode.trim();
 
-        if (!trimmedCode || trimmedCode.length < 8) {
-            setError("Please enter a valid exam code.");
+        if (!trimmedCode) {
+            setError("Please enter an exam code.");
+            return;
+        }
+
+        if (!isValidUUID(trimmedCode)) {
+            setError("Invalid exam code format. Please enter a valid Exam UUID.");
             return;
         }
 
@@ -39,9 +50,9 @@ function Examcode() {
             console.log('Fetching exam with code:', trimmedCode);
             const { data, error: fetchError } = await supabase
                 .from('exams')
-                .select('*')
+                .select('id, is_active')
                 .eq('id', trimmedCode)
-                .single();
+                .maybeSingle();
 
             console.log('Exam fetch response:', { data, fetchError });
             setIsLoading(false);
