@@ -72,6 +72,7 @@ export default function ExamAttempt() {
   const isDisposedRef = useRef(false)
   const [examAttemptId, setExamAttemptId] = useState(null)
   const currentAttemptIdRef = useRef(null)
+  const expiresAtRef = useRef(null)
   const [studentId, setStudentId] = useState(null)
   const lastLogTime = useRef(Date.now())
   const logCooldown = 5000 // 5 seconds cooldown between logs for the same event
@@ -92,6 +93,8 @@ export default function ExamAttempt() {
   const [lastFlagTime, setLastFlagTime] = useState(0);
   const [flaggedQuestions, setFlaggedQuestions] = useState({});
   const [notes, setNotes] = useState('');
+  const lastFaceDetectionTimeRef = useRef(0);
+  const FACE_DETECTION_INTERVAL_MS = 350; // Throttle AI face mesh to ~2.85 Hz (every 350ms) to prevent CPU/GPU starvation
   const [currentDateTime, setCurrentDateTime] = useState(new Date());
 
   useEffect(() => {
@@ -289,14 +292,17 @@ export default function ExamAttempt() {
   // Run face and object detection
   const runDetections = useCallback(async () => {
     if (!faceDetector || !detectionRunningRef.current || !videoRef.current) {
-      console.log('Detection not running. Check conditions:', {
-        faceDetector: !!faceDetector,
-        detectionRunning: detectionRunningRef.current,
-        videoRef: !!videoRef.current,
-        videoReady: videoRef.current?.readyState
-      });
       return;
     }
+
+    const nowTimestamp = Date.now();
+    if (nowTimestamp - lastFaceDetectionTimeRef.current < FACE_DETECTION_INTERVAL_MS) {
+      if (detectionRunningRef.current) {
+        requestAnimationFrame(runDetections);
+      }
+      return;
+    }
+    lastFaceDetectionTimeRef.current = nowTimestamp;
     
     const video = videoRef.current;
     if (video.readyState < 2) {
@@ -878,9 +884,9 @@ export default function ExamAttempt() {
         setStudentId(user.id);
 
         // Check for an active (unsubmitted) attempt for this student and exam
-        const { data: existingAttempt, error: attemptFetchError } = await supabase
+        const { data: existingAttempt } = await supabase
           .from('exam_attempts')
-          .select('id, answers')
+          .select('id, answers, created_at, started_at, status')
           .eq('exam_id', examId)
           .eq('student_id', user.id)
           .is('submitted_at', null)
@@ -888,12 +894,14 @@ export default function ExamAttempt() {
 
         let activeAttemptId = null;
         let loadedAnswers = {};
+        let attemptStartTime = Date.now();
 
         if (existingAttempt) {
           console.log('Resuming active attempt:', existingAttempt.id);
           activeAttemptId = existingAttempt.id;
           currentAttemptIdRef.current = existingAttempt.id;
           setExamAttemptId(existingAttempt.id);
+          attemptStartTime = new Date(existingAttempt.started_at || existingAttempt.created_at).getTime();
           if (existingAttempt.answers) {
             loadedAnswers = existingAttempt.answers;
             setAnswers(existingAttempt.answers);
@@ -903,7 +911,7 @@ export default function ExamAttempt() {
           // Double-check to prevent concurrent insertion race in Strict Mode
           const { data: doubleCheckAttempt } = await supabase
             .from('exam_attempts')
-            .select('id, answers')
+            .select('id, answers, created_at, started_at, status')
             .eq('exam_id', examId)
             .eq('student_id', user.id)
             .is('submitted_at', null)
@@ -914,17 +922,23 @@ export default function ExamAttempt() {
             activeAttemptId = doubleCheckAttempt.id;
             currentAttemptIdRef.current = doubleCheckAttempt.id;
             setExamAttemptId(doubleCheckAttempt.id);
+            attemptStartTime = new Date(doubleCheckAttempt.started_at || doubleCheckAttempt.created_at).getTime();
             if (doubleCheckAttempt.answers) {
               loadedAnswers = doubleCheckAttempt.answers;
               setAnswers(doubleCheckAttempt.answers);
             }
           } else {
             // Insert a new attempt record with submitted_at = null
+            const nowIso = new Date().toISOString();
             const { data: newAttempt, error: insertError } = await supabase
               .from('exam_attempts')
               .insert({
                 exam_id: examId,
                 student_id: user.id,
+                started_at: nowIso,
+                last_heartbeat_at: nowIso,
+                status: 'in_progress',
+                stream_status: 'STREAM_NOT_STARTED',
                 answers: {},
                 score: 0,
                 submitted_at: null,
@@ -934,14 +948,36 @@ export default function ExamAttempt() {
               .single();
 
             if (insertError) {
-              console.error('Error starting exam attempt in DB:', insertError);
-              isInitializingAttempt.current = false;
-              throw new Error('Could not initialize exam session on the server. Please try again.');
+              // Backward-compatibility fallback if started_at/status columns are not yet applied to DB
+              console.warn('Initial insert with extended schema failed, retrying with core columns:', insertError.message);
+              const { data: fallbackAttempt, error: fallbackError } = await supabase
+                .from('exam_attempts')
+                .insert({
+                  exam_id: examId,
+                  student_id: user.id,
+                  answers: {},
+                  score: 0,
+                  submitted_at: null,
+                  completed_at: null
+                })
+                .select()
+                .single();
+
+              if (fallbackError) {
+                console.error('Error starting exam attempt in DB:', fallbackError);
+                isInitializingAttempt.current = false;
+                throw new Error('Could not initialize exam session on the server. Please try again.');
+              }
+              activeAttemptId = fallbackAttempt.id;
+              currentAttemptIdRef.current = fallbackAttempt.id;
+              setExamAttemptId(fallbackAttempt.id);
+              attemptStartTime = new Date(fallbackAttempt.created_at).getTime();
             } else {
               console.log('Created new exam attempt in DB:', newAttempt.id);
               activeAttemptId = newAttempt.id;
               currentAttemptIdRef.current = newAttempt.id;
               setExamAttemptId(newAttempt.id);
+              attemptStartTime = new Date(newAttempt.started_at || newAttempt.created_at).getTime();
             }
           }
           isInitializingAttempt.current = false;
@@ -955,19 +991,26 @@ export default function ExamAttempt() {
             correct_answer: q.correct_answer,
             marks: q.marks || 1,
             type: q.type || 'mcq',
-          }))
-          setQuestions(formattedQuestions)
+          }));
+          setQuestions(formattedQuestions);
           
           // Re-initialize answers if not loaded from active attempt
-          const initialAnswers = {}
+          const initialAnswers = {};
           formattedQuestions.forEach(q => {
             initialAnswers[q.id] = loadedAnswers[q.id] !== undefined ? loadedAnswers[q.id] : '';
           });
-          setAnswers(initialAnswers)
+          setAnswers(initialAnswers);
           
-          setTimeLeft((examData.duration_minutes || 90) * 60)
+          // Authoritative timer calculation based on started_at and duration_minutes
+          const durationMinutes = Number(examData.duration_minutes) || 90;
+          const durationSeconds = durationMinutes * 60;
+          const elapsedSeconds = Math.max(0, Math.floor((Date.now() - attemptStartTime) / 1000));
+          const remainingSeconds = Math.max(0, durationSeconds - elapsedSeconds);
+          
+          expiresAtRef.current = attemptStartTime + (durationSeconds * 1000);
+          setTimeLeft(remainingSeconds);
         } else {
-          setError('No questions found in this exam.')
+          setError('No questions found in this exam.');
         }
       } catch (err) {
         console.error(err)
@@ -1056,12 +1099,54 @@ export default function ExamAttempt() {
 
   useEffect(() => {
     if (timeLeft <= 0) {
-      handleSubmit()
-      return
+      if (examAttemptId) {
+        toast.info("Exam time has expired. Submitting your assessment...");
+        handleSubmit();
+      }
+      return;
     }
-    const timer = setInterval(() => setTimeLeft(prev => prev - 1), 1000)
-    return () => clearInterval(timer)
-  }, [timeLeft])
+    const timer = setInterval(() => {
+      if (expiresAtRef.current) {
+        const remaining = Math.max(0, Math.floor((expiresAtRef.current - Date.now()) / 1000));
+        setTimeLeft(remaining);
+      } else {
+        setTimeLeft(prev => Math.max(0, prev - 1));
+      }
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [timeLeft, examAttemptId]);
+
+  // 15-second heartbeat ping for session vitality
+  useEffect(() => {
+    if (!examAttemptId) return;
+
+    const pingHeartbeat = async () => {
+      try {
+        const streamState = (roomRef.current && roomRef.current.state === 'connected')
+          ? 'STREAM_CONNECTED'
+          : (roomRef.current && roomRef.current.state === 'reconnecting')
+            ? 'STREAM_RECONNECTING'
+            : 'STREAM_DISCONNECTED';
+
+        const nowIso = new Date().toISOString();
+        await supabase
+          .from('exam_attempts')
+          .update({
+            last_heartbeat_at: nowIso,
+            stream_status: streamState,
+            status: 'in_progress'
+          })
+          .eq('id', examAttemptId)
+          .is('submitted_at', null);
+      } catch (err) {
+        console.warn('[Heartbeat] Ping notice (non-fatal):', err);
+      }
+    };
+
+    pingHeartbeat();
+    const interval = setInterval(pingHeartbeat, 15000);
+    return () => clearInterval(interval);
+  }, [examAttemptId]);
 
   const handleOptionChange = async (questionId, selectedOption) => {
     setAnswers(prev => {
@@ -1526,84 +1611,102 @@ export default function ExamAttempt() {
         console.log('Received recording blob from stopped recorder:', blobToUpload);
       }
 
-      // Save answers (always, even if recording upload failed)
+      // 1. Prepare submission payload
+      const finalScore = calculateScore(answers, questions);
+      const nowIso = new Date().toISOString();
+      const isExpired = timeLeft <= 0;
       const updateFields = {
         answers: answers,
-        submitted_at: new Date().toISOString(),
-        completed_at: new Date().toISOString(),
-        score: calculateScore(answers, questions), // Use the questions from state
+        submitted_at: nowIso,
+        completed_at: nowIso,
+        status: isExpired ? 'expired' : 'completed',
+        score: finalScore,
       };
-      
-      // Upload recording to Cloudinary synchronously in submission flow
-      if (blobToUpload) {
-        setIsUploading(true);
-        setUploadProgress(0);
-        console.log('Awaiting Cloudinary upload in submission flow...');
-        try {
-          const uploadResult = await uploadBlob(blobToUpload, user.id, (progress) => {
-            setUploadProgress(progress);
-          });
-          
-          if (uploadResult && uploadResult.url) {
-            updateFields.recording_url = uploadResult.url;
-            updateFields.cloudinary_public_id = uploadResult.public_id;
-            updateFields.recording_duration = uploadResult.duration;
-          }
-        } catch (uploadError) {
-          console.error('Recording upload failed:', uploadError);
-          setUploadWarning('Video upload failed, but your answers are saved.');
-        } finally {
-          setIsUploading(false);
-        }
-      }
-      
-      try {
-        // If we have a valid attempt ID, try to update, otherwise insert a new attempt
+
+      // 2. Commit answers & status to database first (authoritative submission)
       let attemptData;
-      
       if (currentAttemptId) {
-        // Try to update existing attempt
         const { data: updated, error: updateError } = await supabase
           .from('exam_attempts')
           .update(updateFields)
           .eq('id', currentAttemptId)
           .select()
           .single();
-          
+
         if (updateError) {
-          console.error('Error updating attempt:', updateError);
-          // If update fails, we'll try to insert a new attempt
-          currentAttemptId = null;
+          console.warn('Update with status failed, retrying core submission fields:', updateError.message);
+          const { answers: a, submitted_at: sa, completed_at: ca, score: sc } = updateFields;
+          const { data: fallbackUpdated, error: fallbackError } = await supabase
+            .from('exam_attempts')
+            .update({ answers: a, submitted_at: sa, completed_at: ca, score: sc })
+            .eq('id', currentAttemptId)
+            .select()
+            .single();
+
+          if (fallbackError) {
+            console.error('Error updating attempt:', fallbackError);
+            currentAttemptId = null;
+          } else {
+            attemptData = fallbackUpdated;
+          }
         } else {
           attemptData = updated;
         }
       }
-      
-      // If we don't have attempt data (either no ID or update failed), insert a new attempt
+
       if (!attemptData) {
         const insertFields = {
           exam_id: examId,
           student_id: user.id,
           ...updateFields,
         };
-        
+
         const { data: inserted, error: insertError } = await supabase
           .from('exam_attempts')
           .insert([insertFields])
           .select()
           .single();
-          
+
         if (insertError || !inserted) {
           console.error('Error inserting attempt:', insertError);
           throw new Error('Could not save your answers to the server. Please inform your instructor.');
         }
-        
-        // Update the current attempt ID with the newly created one
+
         currentAttemptId = inserted.id;
         attemptData = inserted;
       }
 
-      // Clean up duplicate unsubmitted attempts to prevent dangling active states on the dashboard
+      // 3. Initiate Cloudinary video recording upload asynchronously in background
+      if (blobToUpload && currentAttemptId) {
+        const savedAttemptId = currentAttemptId;
+        const savedUserId = user.id;
+        console.log('Initiating background recording upload for attempt:', savedAttemptId);
+        uploadBlob(blobToUpload, savedUserId)
+          .then(async (uploadResult) => {
+            if (uploadResult?.url) {
+              await supabase
+                .from('exam_attempts')
+                .update({
+                  recording_url: uploadResult.url,
+                  cloudinary_public_id: uploadResult.public_id,
+                  recording_duration: uploadResult.duration
+                })
+                .eq('id', savedAttemptId);
+              console.log('Background recording updated successfully');
+            }
+          })
+          .catch(err => {
+            console.warn('Background recording upload notice (non-fatal):', err);
+          });
+      }
+
+      // 4. Log completion event
+      logExamEvent(examId, user.id, isExpired ? 'EXAM_EXPIRED' : 'EXAM_SUBMITTED', {
+        score: finalScore,
+        totalQuestions: questions.length
+      });
+
+      // 5. Clean up duplicate unsubmitted attempts
       if (currentAttemptId) {
         supabase
           .from('exam_attempts')
@@ -1613,23 +1716,17 @@ export default function ExamAttempt() {
           .is('submitted_at', null)
           .neq('id', currentAttemptId)
           .then(({ error }) => {
-            if (error) console.error('Error cleaning up duplicate attempts:', error);
-            else console.log('Cleaned up duplicate unsubmitted attempts successfully');
+            if (error) console.warn('Clean up duplicates notice:', error.message);
           });
       }
 
-      } catch (err) {
-        console.error('Error saving answers:', err);
-        throw new Error('Could not fully save your answers. Please inform your instructor.');
-      }
-      
       // Navigate to the done page with the current state
       navigate(`/exam/${examId}/done`, {
         state: {
           examId,
           answers,
           questions: questions, // Use the questions from state
-          score: calculateScore(answers, questions),
+          score: finalScore,
           totalQuestions: questions.length,
           warning: uploadWarning,
         }
