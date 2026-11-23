@@ -12,7 +12,7 @@ import * as tf from '@tensorflow/tfjs';
 import { uploadToCloudinary } from "../utils/cloudinary";
 import Loader from "../Components/common/Loader";
 import { toast } from 'react-toastify';
-import { fetchLiveKitToken, sendStudentHeartbeat } from "../services/examService";
+import { fetchLiveKitToken, sendStudentHeartbeat, autoSaveAnswers, submitExamAttempt, fetchExamDetails } from "../services/examService";
 
 export default function ExamAttempt() {
   const { id: examId } = useParams()
@@ -141,6 +141,7 @@ export default function ExamAttempt() {
       const flagData = {
         exam_id: examId,
         user_id: user.id,
+        exam_attempt_id: currentAttemptIdRef.current || examAttemptId || null,
         flag_type: flagType,
         timestamp: now,
         metadata: {
@@ -804,15 +805,6 @@ export default function ExamAttempt() {
       setIsLoading(true)
       setError(null)
       try {
-        const { data: examData, error: examError } = await supabase
-          .from("exams")
-          .select("*")
-          .eq("id", examId)
-          .single()
-        if (examError) throw examError
-
-        setExam(examData)
-        
         if (isInitializingAttempt.current) {
           console.log('Already initializing exam attempt, skipping concurrent loadExam call.');
           return;
@@ -927,12 +919,15 @@ export default function ExamAttempt() {
           isInitializingAttempt.current = false;
         }
 
+        // Fetch sanitized exam configuration via secure RPC
+        const examData = await fetchExamDetails(examId);
+        setExam(examData);
+
         if (examData.questions && Array.isArray(examData.questions)) {
           const formattedQuestions = examData.questions.map((q, index) => ({
             id: q.id || `q-${index}`,
             question_text: q.question || q.question_text || '',
-            options: q.type === 'mcq' ? [q.optionA, q.optionB, q.optionC, q.optionD].filter(Boolean) : [],
-            correct_answer: q.correct_answer,
+            options: q.type === 'mcq' ? [q.optionA, q.optionB, q.optionC, q.optionD].filter(Boolean) : (q.options || []),
             marks: q.marks || 1,
             type: q.type || 'mcq',
           }));
@@ -1056,15 +1051,9 @@ export default function ExamAttempt() {
     setAnswers(prev => {
       const updated = { ...prev, [questionId]: selectedOption };
       
-      // Auto-save to Supabase
+      // Auto-save via examService (RPC or validated answers update)
       if (examAttemptId) {
-        supabase
-          .from('exam_attempts')
-          .update({ answers: updated })
-          .eq('id', examAttemptId)
-          .then(({ error }) => {
-            if (error) console.error('Error auto-saving answer:', error);
-          });
+        autoSaveAnswers(examAttemptId, updated);
       }
       return updated;
     });
@@ -1515,54 +1504,34 @@ export default function ExamAttempt() {
         console.log('Received recording blob from stopped recorder:', blobToUpload);
       }
 
-      // 1. Prepare submission payload
-      const finalScore = calculateScore(answers, questions);
-      const nowIso = new Date().toISOString();
-      const isExpired = (expiresAtRef.current && Date.now() > expiresAtRef.current) || timeLeft <= 0;
-      const updateFields = {
-        answers: answers,
-        submitted_at: nowIso,
-        completed_at: nowIso,
-        status: isExpired ? 'expired' : 'completed',
-        score: finalScore,
-      };
-
-      // 2. Commit answers & status to database first (authoritative submission)
-      let attemptData;
+      // 1. Submit answers to server for authoritative scoring & completion
+      let submitResult = null;
       if (currentAttemptId) {
-        const { data: updated, error: updateError } = await supabase
-          .from('exam_attempts')
-          .update(updateFields)
-          .eq('id', currentAttemptId)
-          .select()
-          .single();
-
-        if (updateError) {
-          console.warn('Update with status failed, retrying core submission fields:', updateError.message);
-          const { answers: a, submitted_at: sa, completed_at: ca, score: sc } = updateFields;
-          const { data: fallbackUpdated, error: fallbackError } = await supabase
-            .from('exam_attempts')
-            .update({ answers: a, submitted_at: sa, completed_at: ca, score: sc })
-            .eq('id', currentAttemptId)
-            .select()
-            .single();
-
-          if (fallbackError) {
-            console.error('Error updating attempt:', fallbackError);
-            currentAttemptId = null;
-          } else {
-            attemptData = fallbackUpdated;
-          }
-        } else {
-          attemptData = updated;
+        try {
+          submitResult = await submitExamAttempt(currentAttemptId, answers, questions);
+          console.log('Authoritative exam submission result:', submitResult);
+        } catch (subErr) {
+          console.warn('submitExamAttempt RPC notice, using fallback submission:', subErr);
         }
       }
 
-      if (!attemptData) {
+      const finalScore = submitResult?.score !== undefined 
+        ? submitResult.score 
+        : calculateScore(answers, questions);
+      const isExpired = submitResult?.status === 'expired' || 
+        ((expiresAtRef.current && Date.now() > expiresAtRef.current) || timeLeft <= 0);
+
+      // If no attempt existed, initialize submission attempt
+      if (!currentAttemptId) {
+        const nowIso = new Date().toISOString();
         const insertFields = {
           exam_id: examId,
           student_id: user.id,
-          ...updateFields,
+          answers: answers,
+          submitted_at: nowIso,
+          completed_at: nowIso,
+          status: isExpired ? 'expired' : 'completed',
+          score: finalScore,
         };
 
         const { data: inserted, error: insertError } = await supabase
@@ -1577,7 +1546,6 @@ export default function ExamAttempt() {
         }
 
         currentAttemptId = inserted.id;
-        attemptData = inserted;
       }
 
       // 3. Initiate Cloudinary video recording upload asynchronously in background

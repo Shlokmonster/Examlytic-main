@@ -208,9 +208,24 @@ export const sendStudentHeartbeat = async (attemptId, streamStatus = STREAM_STAT
 
 /**
  * Auto-save student answers incrementally
+ * Uses save_student_answers_v1 RPC if available, with direct update fallback.
  */
 export const autoSaveAnswers = async (attemptId, answers) => {
-  if (!attemptId) return;
+  if (!attemptId || !answers) return null;
+
+  try {
+    const { data: rpcData, error: rpcError } = await supabase
+      .rpc('save_student_answers_v1', {
+        p_attempt_id: attemptId,
+        p_answers: answers,
+      });
+
+    if (!rpcError && rpcData?.success) {
+      return rpcData;
+    }
+  } catch {
+    // Fall back to direct table update
+  }
 
   try {
     const { error } = await supabase
@@ -219,8 +234,10 @@ export const autoSaveAnswers = async (attemptId, answers) => {
       .eq('id', attemptId);
 
     if (error) console.error('[examService] Auto-save error:', error);
+    return { success: !error };
   } catch (err) {
     console.error('[examService] Auto-save exception:', err);
+    return null;
   }
 };
 
@@ -236,11 +253,14 @@ export const submitExamAttempt = async (attemptId, answers, fallbackQuestions = 
     const { data: rpcData, error: rpcError } = await supabase
       .rpc('submit_student_exam_attempt_v1', {
         p_attempt_id: attemptId,
-        p_answers: answers,
+        p_answers: answers || {},
       });
 
-    if (!rpcError && rpcData?.success) {
+    if (!rpcError && rpcData) {
       return rpcData;
+    }
+    if (rpcError) {
+      console.warn('[examService] Server submit RPC returned error:', rpcError);
     }
   } catch (err) {
     console.warn('[examService] Server submit RPC fallback:', err);
@@ -249,7 +269,8 @@ export const submitExamAttempt = async (attemptId, answers, fallbackQuestions = 
   // 2. Fallback: calculate score client-side if RPC not yet deployed
   let correctCount = 0;
   fallbackQuestions.forEach(q => {
-    if (q.correct_answer && q.correct_answer === answers[q.id]) {
+    const correct = q.correct_answer || q.correctAnswer;
+    if (correct && correct === answers[q.id]) {
       correctCount++;
     }
   });
