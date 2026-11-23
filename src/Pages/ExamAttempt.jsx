@@ -26,7 +26,6 @@ export default function ExamAttempt() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [isExamLoaded, setIsExamLoaded] = useState(false)
-  const [isExamExpired, setIsExamExpired] = useState(false)
   const [error, setError] = useState(null)
   const videoRef = useRef()
   const canvasRef = useRef()
@@ -843,20 +842,38 @@ export default function ExamAttempt() {
         }
         setStudentId(user.id);
 
-        // 2. Fetch sanitized exam configuration via secure RPC
-        const examData = await fetchExamDetails(examId);
-        setExam(examData);
+        // 2. Fetch basic exam metadata (title, duration_minutes, is_active)
+        const { data: examMeta, error: metaError } = await supabase
+          .from('exams')
+          .select('id, title, duration_minutes, is_active')
+          .eq('id', examId)
+          .maybeSingle();
 
-        if (!examData || !examData.questions || !Array.isArray(examData.questions) || examData.questions.length === 0) {
+        if (metaError || !examMeta) {
           isInitializingAttempt.current = false;
-          setError('No questions found in this exam.');
+          setError('Exam not found or unavailable.');
           return false;
         }
 
-        const durationMinutes = Number(examData.duration_minutes) || 90;
+        // Check if instructor has locked the exam from dashboard
+        if (examMeta.is_active === false) {
+          console.warn('[Exam Lifecycle] Exam is locked by instructor.');
+          isInitializingAttempt.current = false;
+          navigate(`/exam/${examId}/blocked`, { replace: true });
+          return false;
+        }
+
+        const durationMinutes = Number(examMeta.duration_minutes) || 90;
         const durationSeconds = durationMinutes * 60;
 
-        // 3. Check if student already submitted or completed an attempt for this exam
+        // 3. Check if student already submitted or completed this exam
+        const { data: userProfile } = await supabase
+          .from('users')
+          .select('role')
+          .eq('id', user.id)
+          .maybeSingle();
+        const isUserAdmin = userProfile?.role === 'admin';
+
         const { data: completedAttempt } = await supabase
           .from('exam_attempts')
           .select('id, submitted_at, completed_at, status')
@@ -865,7 +882,8 @@ export default function ExamAttempt() {
           .or('submitted_at.not.is.null,completed_at.not.is.null,status.eq.completed')
           .maybeSingle();
 
-        if (completedAttempt) {
+        // Non-admin students who already submitted cannot retake
+        if (completedAttempt && !isUserAdmin) {
           console.log('Student has already submitted this exam, redirecting to completion page...');
           isInitializingAttempt.current = false;
           navigate(`/exam/${examId}/done`, { replace: true });
@@ -890,31 +908,55 @@ export default function ExamAttempt() {
           const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startTime) / 1000));
           const remainingSeconds = durationSeconds - elapsedSeconds;
 
-          // Guard against stale/expired attempts auto-submitting empty answers on start
-          if (remainingSeconds <= 0 || existingAttempt.status === 'expired') {
-            console.warn('[Exam Lifecycle] Existing attempt has expired. Blocking phantom auto-submit.');
+          // If attempt is actively in progress within its duration, resume it!
+          if (remainingSeconds > 0 && existingAttempt.status === 'in_progress') {
+            console.log('Resuming active in-flight attempt:', existingAttempt.id);
+            _activeAttemptId = existingAttempt.id;
+            currentAttemptIdRef.current = existingAttempt.id;
+            setExamAttemptId(existingAttempt.id);
+            attemptStartTime = startTime;
+            expiresAtRef.current = startTime + (durationSeconds * 1000);
+            setTimeLeft(remainingSeconds);
+
+            if (existingAttempt.answers) {
+              loadedAnswers = existingAttempt.answers;
+              setAnswers(existingAttempt.answers);
+            }
+          } else {
+            // Attempt is stale/expired from hours or days ago. Close it and start fresh!
+            console.log('[Exam Lifecycle] Closing stale attempt and provisioning fresh attempt:', existingAttempt.id);
             await supabase
               .from('exam_attempts')
               .update({ status: 'expired' })
               .eq('id', existingAttempt.id);
 
-            setIsExamExpired(true);
-            setIsLoading(false);
-            isInitializingAttempt.current = false;
-            return false;
-          }
+            const nowIso = new Date().toISOString();
+            const { data: freshAttempt, error: freshErr } = await supabase
+              .from('exam_attempts')
+              .insert({
+                exam_id: examId,
+                student_id: user.id,
+                started_at: nowIso,
+                last_heartbeat_at: nowIso,
+                status: 'in_progress',
+                stream_status: 'STREAM_NOT_STARTED',
+                answers: {},
+                score: 0,
+                submitted_at: null,
+                completed_at: null
+              })
+              .select()
+              .single();
 
-          console.log('Resuming active in-flight attempt:', existingAttempt.id);
-          _activeAttemptId = existingAttempt.id;
-          currentAttemptIdRef.current = existingAttempt.id;
-          setExamAttemptId(existingAttempt.id);
-          attemptStartTime = startTime;
-          expiresAtRef.current = startTime + (durationSeconds * 1000);
-          setTimeLeft(remainingSeconds);
+            if (freshErr) throw freshErr;
 
-          if (existingAttempt.answers) {
-            loadedAnswers = existingAttempt.answers;
-            setAnswers(existingAttempt.answers);
+            _activeAttemptId = freshAttempt.id;
+            currentAttemptIdRef.current = freshAttempt.id;
+            setExamAttemptId(freshAttempt.id);
+            attemptStartTime = Date.now();
+            expiresAtRef.current = attemptStartTime + (durationSeconds * 1000);
+            setTimeLeft(durationSeconds);
+            setAnswers({});
           }
           isInitializingAttempt.current = false;
         } else {
@@ -932,29 +974,52 @@ export default function ExamAttempt() {
             const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startTime) / 1000));
             const remainingSeconds = durationSeconds - elapsedSeconds;
 
-            if (remainingSeconds <= 0 || doubleCheckAttempt.status === 'expired') {
+            if (remainingSeconds > 0 && doubleCheckAttempt.status === 'in_progress') {
+              console.log('Race condition prevented, resuming verified attempt:', doubleCheckAttempt.id);
+              _activeAttemptId = doubleCheckAttempt.id;
+              currentAttemptIdRef.current = doubleCheckAttempt.id;
+              setExamAttemptId(doubleCheckAttempt.id);
+              attemptStartTime = startTime;
+              expiresAtRef.current = startTime + (durationSeconds * 1000);
+              setTimeLeft(remainingSeconds);
+
+              if (doubleCheckAttempt.answers) {
+                loadedAnswers = doubleCheckAttempt.answers;
+                setAnswers(doubleCheckAttempt.answers);
+              }
+            } else {
               await supabase
                 .from('exam_attempts')
                 .update({ status: 'expired' })
                 .eq('id', doubleCheckAttempt.id);
 
-              setIsExamExpired(true);
-              setIsLoading(false);
-              isInitializingAttempt.current = false;
-              return false;
-            }
+              const nowIso = new Date().toISOString();
+              const { data: freshAttempt, error: freshErr } = await supabase
+                .from('exam_attempts')
+                .insert({
+                  exam_id: examId,
+                  student_id: user.id,
+                  started_at: nowIso,
+                  last_heartbeat_at: nowIso,
+                  status: 'in_progress',
+                  stream_status: 'STREAM_NOT_STARTED',
+                  answers: {},
+                  score: 0,
+                  submitted_at: null,
+                  completed_at: null
+                })
+                .select()
+                .single();
 
-            console.log('Race condition prevented, resuming verified attempt:', doubleCheckAttempt.id);
-            _activeAttemptId = doubleCheckAttempt.id;
-            currentAttemptIdRef.current = doubleCheckAttempt.id;
-            setExamAttemptId(doubleCheckAttempt.id);
-            attemptStartTime = startTime;
-            expiresAtRef.current = startTime + (durationSeconds * 1000);
-            setTimeLeft(remainingSeconds);
+              if (freshErr) throw freshErr;
 
-            if (doubleCheckAttempt.answers) {
-              loadedAnswers = doubleCheckAttempt.answers;
-              setAnswers(doubleCheckAttempt.answers);
+              _activeAttemptId = freshAttempt.id;
+              currentAttemptIdRef.current = freshAttempt.id;
+              setExamAttemptId(freshAttempt.id);
+              attemptStartTime = Date.now();
+              expiresAtRef.current = attemptStartTime + (durationSeconds * 1000);
+              setTimeLeft(durationSeconds);
+              setAnswers({});
             }
           } else {
             // Insert a new attempt record with submitted_at = null
@@ -1016,6 +1081,17 @@ export default function ExamAttempt() {
           isInitializingAttempt.current = false;
         }
 
+        // 5. Fetch sanitized exam configuration via secure RPC
+        // (Active attempt is verified in DB, so get_student_exam_questions_v1 will return questions)
+        const examData = await fetchExamDetails(examId);
+        setExam(examData);
+
+        if (!examData || !examData.questions || !Array.isArray(examData.questions) || examData.questions.length === 0) {
+          isInitializingAttempt.current = false;
+          setError('No questions found in this exam.');
+          return false;
+        }
+
         // Format and set questions
         const formattedQuestions = examData.questions.map((q, index) => ({
           id: q.id || `q-${index}`,
@@ -1034,10 +1110,12 @@ export default function ExamAttempt() {
         setAnswers(initialAnswers);
 
         setIsExamLoaded(true);
+        isInitializingAttempt.current = false;
         return true;
       } catch (err) {
         console.error(err);
         setError(err.message || 'Failed to load exam.');
+        isInitializingAttempt.current = false;
         return false;
       } finally {
         setIsLoading(false);
@@ -1722,28 +1800,6 @@ export default function ExamAttempt() {
           : "Submitting your exam responses securely..."
         } 
       />
-    );
-  }
-  if (isExamExpired) {
-    return (
-      <div className="login-page" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div className="login-card" style={{ maxWidth: '480px', textAlign: 'center', padding: '32px' }}>
-          <div style={{ fontSize: '48px', marginBottom: '16px' }}>⏱️</div>
-          <h2 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#1F2937', marginBottom: '12px' }}>
-            Exam Session Expired
-          </h2>
-          <p style={{ color: '#4B5563', fontSize: '0.95rem', lineHeight: '1.5', marginBottom: '24px' }}>
-            The time limit for your exam session has lapsed. You can no longer submit answers for this attempt.
-          </p>
-          <button 
-            className="next-question-btn"
-            style={{ width: '100%', justifyContent: 'center' }}
-            onClick={() => navigate('/examcode')}
-          >
-            Return to Dashboard
-          </button>
-        </div>
-      </div>
     );
   }
   if (error) {

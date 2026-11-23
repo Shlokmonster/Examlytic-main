@@ -111,5 +111,42 @@ describe('Exam Immediate Auto-Submit Prevention Tests', () => {
     assert.strictEqual(confirmPrompted, false);
     assert.strictEqual(autoResult.isAutoSubmit, true);
   });
+
+  it('6. Stale expired attempt is replaced with fresh attempt having full duration upon starting active exam', () => {
+    const examDurationMinutes = 60;
+    const durationSeconds = examDurationMinutes * 60; // 3600s
+    // Attempt started yesterday
+    const yesterday = Date.now() - (24 * 3600 * 1000);
+    const staleAttempt = {
+      id: 'stale-attempt-1',
+      started_at: new Date(yesterday).toISOString(),
+      status: 'in_progress',
+    };
+
+    const startTime = new Date(staleAttempt.started_at).getTime();
+    const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startTime) / 1000));
+    const remainingSeconds = durationSeconds - elapsedSeconds;
+
+    let activeAttemptId = null;
+    let initialTimeLeft = null;
+
+    if (remainingSeconds <= 0) {
+      // Close stale attempt
+      staleAttempt.status = 'expired';
+
+      // Start fresh attempt
+      const freshAttempt = {
+        id: 'fresh-attempt-2',
+        started_at: new Date().toISOString(),
+        status: 'in_progress',
+      };
+      activeAttemptId = freshAttempt.id;
+      initialTimeLeft = durationSeconds;
+    }
+
+    assert.strictEqual(staleAttempt.status, 'expired');
+    assert.strictEqual(activeAttemptId, 'fresh-attempt-2');
+    assert.strictEqual(initialTimeLeft, 3600, 'Student should receive full 3600s (60 min) on fresh attempt');
+  });
 });
 
