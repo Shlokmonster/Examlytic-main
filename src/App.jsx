@@ -6,7 +6,6 @@ import { useAuth } from "./hooks/useAuth"
 import Login from "./Pages/Login"
 import AdminDashboard from "./Pages/AdminDashboard"
 import CreateExam from "./Pages/CreateExam"
-import StudentExamPage from "./Pages/StudentExamPage"
 import ExamIntro from "./Pages/ExamIntro"
 import ExamAttempt from "./Pages/ExamAttempt"
 import ExamBlocked from "./Pages/ExamBlocked";
@@ -49,7 +48,7 @@ function App() {
         if (error || !userData) {
           console.log('User not found by ID, trying by email...');
           // Try to find by email as fallback
-          const { data: userByEmail, error: emailError } = await supabase
+          const { data: userByEmail, error: _emailError } = await supabase
             .from('users')
             .select('id, role, email')
             .eq('email', user.email)
@@ -150,7 +149,7 @@ function App() {
         <>
           <Route path="/examcode" element={<Examcode />} />
           <Route path="/diagnostics/:examCode" element={<Diagnostics />} />
-          <Route path="/exam" element={<StudentExamPage />} />
+          <Route path="/exam" element={<Navigate to="/examcode" replace />} />
           <Route path="/exam/:examId/done" element={<Examdone />} />
           <Route path="/" element={<Navigate to="/examcode" replace />} />
           <Route path="*" element={<Navigate to="/examcode" replace />} />
