@@ -71,6 +71,7 @@ export default function ExamAttempt() {
   const onStopResolver = useRef(null)
   const isDisposedRef = useRef(false)
   const [examAttemptId, setExamAttemptId] = useState(null)
+  const currentAttemptIdRef = useRef(null)
   const [studentId, setStudentId] = useState(null)
   const lastLogTime = useRef(Date.now())
   const logCooldown = 5000 // 5 seconds cooldown between logs for the same event
@@ -598,7 +599,7 @@ export default function ExamAttempt() {
         },
         body: JSON.stringify({
           roomName: `exam-${examId}`,
-          participantName: `student-${studentId || 'unknown'}-${Date.now()}`,
+          participantName: `student___${currentAttemptIdRef.current || examAttemptId || 'attempt'}___${studentId || user?.id || 'unknown'}`,
           studentName: resolvedStudentName,
           isPublisher: true
         })
@@ -609,6 +610,10 @@ export default function ExamAttempt() {
       }
 
       const { token, url } = await response.json();
+
+      if (!url) {
+        throw new Error('LiveKit streaming server URL is missing from server response. Please verify configuration.');
+      }
 
       setConnectionStatus('Connecting to streaming server...');
       const room = new Room();
@@ -628,7 +633,7 @@ export default function ExamAttempt() {
         }, 2000);
       });
 
-      await room.connect(url || 'wss://0.peerjs.com', token);
+      await room.connect(url, token);
       console.log('Connected to LiveKit room:', room.name);
       setConnectionStatus('Connected to streaming server');
       reconnectAttempts.current = 0;
@@ -887,6 +892,7 @@ export default function ExamAttempt() {
         if (existingAttempt) {
           console.log('Resuming active attempt:', existingAttempt.id);
           activeAttemptId = existingAttempt.id;
+          currentAttemptIdRef.current = existingAttempt.id;
           setExamAttemptId(existingAttempt.id);
           if (existingAttempt.answers) {
             loadedAnswers = existingAttempt.answers;
@@ -906,6 +912,7 @@ export default function ExamAttempt() {
           if (doubleCheckAttempt) {
             console.log('Race condition prevented, resuming verified attempt:', doubleCheckAttempt.id);
             activeAttemptId = doubleCheckAttempt.id;
+            currentAttemptIdRef.current = doubleCheckAttempt.id;
             setExamAttemptId(doubleCheckAttempt.id);
             if (doubleCheckAttempt.answers) {
               loadedAnswers = doubleCheckAttempt.answers;
@@ -933,6 +940,7 @@ export default function ExamAttempt() {
             } else {
               console.log('Created new exam attempt in DB:', newAttempt.id);
               activeAttemptId = newAttempt.id;
+              currentAttemptIdRef.current = newAttempt.id;
               setExamAttemptId(newAttempt.id);
             }
           }
@@ -1082,34 +1090,36 @@ export default function ExamAttempt() {
     if (currentQuestionIndex > 0) setCurrentQuestionIndex(prev => prev - 1)
   }
 
-  const [attemptId, setAttemptId] = useState(null);
   const [logs, setLogs] = useState([]);
 
-  // Log event locally and to Supabase
+  // Log event locally and to Supabase with valid attempt reference
   const logEvent = async (eventType, eventDetails = {}) => {
     setLogs(prev => [...prev, { eventType, eventDetails, timestamp: new Date().toISOString() }]);
     try {
       const { data: userData } = await supabase.auth.getUser();
+      const targetAttemptId = currentAttemptIdRef.current || examAttemptId || null;
       await supabase.from('exam_logs').insert([
         {
-          exam_attempt_id: attemptId,
-          student_id: userData?.user?.id,
+          exam_attempt_id: targetAttemptId,
+          student_id: userData?.user?.id || studentId,
           event_type: eventType,
-          event_details: eventDetails,
+          event_details: { ...eventDetails, exam_id: examId },
         }
       ]);
     } catch (err) {
-      console.error('Log error:', err);
+      console.warn('Log error (non-fatal):', err);
     }
   };
 
-  // Log exam event
-  const logExamEvent = async (examId, studentId, eventType, eventDetails = {}) => {
+  // Log exam event with valid attempt reference
+  const logExamEvent = async (targetExamId, targetStudentId, eventType, eventDetails = {}) => {
     const timestamp = new Date().toISOString();
+    const targetAttemptId = currentAttemptIdRef.current || examAttemptId || null;
     const logData = {
       timestamp,
-      exam_id: examId,  // For our reference in logs
-      student_id: studentId,
+      exam_id: targetExamId || examId,
+      student_id: targetStudentId || studentId,
+      exam_attempt_id: targetAttemptId,
       event_type: eventType,
       ...eventDetails
     };
@@ -1118,25 +1128,24 @@ export default function ExamAttempt() {
     console.log(`[Exam Monitor] ${eventType}`, logData);
     
     try {
-      // Log to Supabase - using null for exam_attempt_id since it's not required
-      const { data, error } = await supabase
+      const { error } = await supabase
         .from('exam_logs')
         .insert([
           { 
-            exam_attempt_id: null,  // Set to null to avoid foreign key constraint
-            student_id: studentId,
+            exam_attempt_id: targetAttemptId,
+            student_id: targetStudentId || studentId,
             event_type: eventType,
-            event_details: { ...eventDetails, exam_id: examId }  // Include exam_id in details
+            event_details: { ...eventDetails, exam_id: targetExamId || examId }
           }
         ]);
 
       if (error) {
-        console.error('[Exam Monitor] Error logging to Supabase:', error);
+        console.warn('[Exam Monitor] Notice logging to Supabase (non-fatal):', error);
       } else {
         console.log(`[Exam Monitor] Successfully logged ${eventType} to Supabase`);
       }
     } catch (error) {
-      console.error('[Exam Monitor] Error in logExamEvent:', error);
+      console.warn('[Exam Monitor] Error in logExamEvent (non-fatal):', error);
     }
   };
 
@@ -1334,7 +1343,7 @@ export default function ExamAttempt() {
         });
       }
     };
-  }, [attemptId]);
+  }, [examAttemptId]);
 
   // Function to calculate score
   const calculateScore = (answers, questions) => {

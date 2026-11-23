@@ -61,12 +61,8 @@ function ExamStatusCheck() {
 
   // Handle errors
   if (error) {
-    // Don't show error toast if we're already on the intro page
-    if (!location.pathname.includes('/exam/intro')) {
-      toast.error('Invalid or expired exam link');
-      return <Navigate to="/exam/intro" replace state={{ from: location }} />;
-    }
-    return null;
+    toast.error('Invalid or expired exam link');
+    return <Navigate to="/examcode" replace state={{ from: location, error }} />;
   }
 
   // If exam is not active, redirect to blocked page
@@ -84,8 +80,8 @@ function ExamStatusCheck() {
     return <Outlet context={{ exam }} />;
   }
 
-  // Fallback - redirect to intro if something unexpected happens
-  return <Navigate to="/exam/intro" replace />;
+  // Fallback - redirect to examcode if something unexpected happens
+  return <Navigate to="/examcode" replace />;
 }
 
 export default ExamStatusCheck;

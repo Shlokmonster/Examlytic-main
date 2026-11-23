@@ -9,7 +9,6 @@ function Login() {
 
     useEffect(() => {
         const init = async () => {
-            await supabase.auth.signOut(); // optional: force re-login each time
             const { data: { session } } = await supabase.auth.getSession();
 
             if (session) {

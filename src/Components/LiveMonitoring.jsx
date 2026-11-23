@@ -12,104 +12,32 @@ const LiveMonitoring = ({ examId: propExamId }) => {
   const [fullscreen, setFullscreen] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [recordedStreams, setRecordedStreams] = useState({});
   const [logs, setLogs] = useState([]);
   const [isLogsOpen, setIsLogsOpen] = useState(false);
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState(null);
-  const mediaRecorders = useRef({});
-  
   const roomRef = useRef(null);
   const connections = useRef({});
   const videoRefs = useRef({});
   const mediaStreams = useRef({});
 
-  // Function to save stream data to localStorage with exam and student info
-  const saveStreamToLocalStorage = useCallback((studentId, blob, metadata = {}) => {
-    try {
-      const reader = new FileReader();
-      reader.readAsDataURL(blob);
-      reader.onloadend = () => {
-        const base64data = reader.result;
-        const recordings = JSON.parse(localStorage.getItem('studentRecordings') || '{}');
-        const recordingKey = `${metadata.examId}_${studentId}`;
-        
-        recordings[recordingKey] = recordings[recordingKey] || {
-          examId: metadata.examId,
-          studentId: studentId,
-          studentName: metadata.studentName || 'Unknown Student',
-          examName: metadata.examName || 'Unknown Exam',
-          recordings: []
-        };
-        
-        recordings[recordingKey].recordings.push({
-          timestamp: new Date().toISOString(),
-          data: base64data
-        });
-        
-        // Keep only the last 100 recordings per student per exam
-        if (recordings[recordingKey].recordings.length > 100) {
-          recordings[recordingKey].recordings = recordings[recordingKey].recordings.slice(-100);
-        }
-        
-        localStorage.setItem('studentRecordings', JSON.stringify(recordings));
-        setRecordedStreams(recordings);
+  // Helper function to safely parse participant identity
+  // Format: student___{attemptId}___{studentId}
+  const parseParticipantIdentity = useCallback((identity) => {
+    if (!identity) return { attemptId: null, studentId: 'unknown' };
+    if (identity.includes('___')) {
+      const parts = identity.split('___');
+      return {
+        attemptId: parts[1] || null,
+        studentId: parts[2] || parts[1] || identity
       };
-    } catch (err) {
-      console.error('Error saving stream to localStorage:', err);
     }
-  }, []);
-
-  // Function to start recording a stream
-  const startRecordingStream = useCallback((stream, studentId, metadata = {}) => {
-    try {
-      // Stop any existing recorder for this student
-      if (mediaRecorders.current[studentId]) {
-        mediaRecorders.current[studentId].stop();
-      }
-
-      // Create a MediaRecorder instance
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: 'video/webm;codecs=vp9',
-        videoBitsPerSecond: 2500000 // 2.5Mbps
-      });
-
-      const recordedChunks = [];
-
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          recordedChunks.push(event.data);
-          saveStreamToLocalStorage(studentId, event.data, {
-            examId: metadata.examId || 'unknown_exam',
-            studentName: metadata.studentName || 'Unknown Student',
-            examName: metadata.examName || 'Unknown Exam'
-          });
-        }
-      };
-
-      mediaRecorder.onstop = () => {
-        // Cleanup
-        delete mediaRecorders.current[studentId];
-      };
-
-      // Start recording, and save a chunk every 5 seconds
-      mediaRecorder.start(5000);
-      mediaRecorders.current[studentId] = mediaRecorder;
-
-    } catch (err) {
-      console.error('Error starting stream recording:', err);
+    // Fallback for legacy format: student-{uuid}-{timestamp}
+    const legacyMatch = identity.match(/^student-([0-9a-fA-F-]{36})(?:-\d+)?$/);
+    if (legacyMatch) {
+      return { attemptId: null, studentId: legacyMatch[1] };
     }
-  }, [saveStreamToLocalStorage]);
-
-  // Function to get all recordings for a student
-  const getStudentRecordings = useCallback((studentId) => {
-    try {
-      const recordings = JSON.parse(localStorage.getItem('studentRecordings') || '{}');
-      return recordings[studentId] || [];
-    } catch (err) {
-      console.error('Error getting student recordings:', err);
-      return [];
-    }
+    return { attemptId: null, studentId: identity.replace(/^student-/, '') };
   }, []);
 
   // Fetch all logs from the last 3 minutes
@@ -149,20 +77,8 @@ const LiveMonitoring = ({ examId: propExamId }) => {
   const cleanup = useCallback(() => {
     console.log('Cleaning up resources...');
     
-    // Stop all media recorders first
-    Object.entries(mediaRecorders.current).forEach(([id, recorder]) => {
-      try {
-        if (recorder && recorder.state !== 'inactive') {
-          recorder.stop();
-        }
-      } catch (e) {
-        console.error('Error stopping recorder:', e);
-      }
-    });
-    mediaRecorders.current = {};
-    
     // Close all peer connections
-    Object.entries(connections.current).forEach(([id, conn]) => {
+    Object.entries(connections.current).forEach(([, conn]) => {
       try {
         if (conn && typeof conn.close === 'function') {
           conn.off('stream');
@@ -175,18 +91,6 @@ const LiveMonitoring = ({ examId: propExamId }) => {
       }
     });
     connections.current = {};
-
-    // Stop all media recorders
-    Object.entries(mediaRecorders.current).forEach(([id, recorder]) => {
-      try {
-        if (recorder && recorder.state !== 'inactive') {
-          recorder.stop();
-        }
-      } catch (e) {
-        console.error('Error stopping recorder:', e);
-      }
-    });
-    mediaRecorders.current = {};
 
     // Stop all media tracks
     Object.entries(mediaStreams.current).forEach(([id, stream]) => {
@@ -201,7 +105,7 @@ const LiveMonitoring = ({ examId: propExamId }) => {
     mediaStreams.current = {};
 
     // Clear video elements
-    Object.entries(videoRefs.current).forEach(([id, video]) => {
+    Object.entries(videoRefs.current).forEach(([, video]) => {
       if (video && video.srcObject) {
         video.srcObject = null;
       }
@@ -358,35 +262,29 @@ const LiveMonitoring = ({ examId: propExamId }) => {
           if (track.kind === 'video') {
             const mediaStream = new MediaStream([track.mediaStreamTrack]);
             
-            // Extract student ID and details from identity or name
-            const identityParts = participant.identity.split('-');
-            const studentId = identityParts[1] || participant.identity;
+            // Extract student ID and details cleanly without UUID truncation
+            const { studentId } = parseParticipantIdentity(participant.identity);
             const studentName = participant.name || 'Student';
 
             handleIncomingStream(studentId, mediaStream, studentName);
-
-            // Start recording stream
-            startRecordingStream(mediaStream, studentId, {
-              examId,
-              studentName,
-              examName: 'Exam'
-            });
           }
         });
 
         room.on(RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
-          const identityParts = participant.identity.split('-');
-          const studentId = identityParts[1] || participant.identity;
+          const { studentId } = parseParticipantIdentity(participant.identity);
           cleanupOldConnection(studentId);
         });
 
         room.on(RoomEvent.ParticipantDisconnected, (participant) => {
-          const identityParts = participant.identity.split('-');
-          const studentId = identityParts[1] || participant.identity;
+          const { studentId } = parseParticipantIdentity(participant.identity);
           cleanupOldConnection(studentId);
         });
 
-        await room.connect(url || 'wss://0.peerjs.com', token);
+        if (!url) {
+          throw new Error('LiveKit streaming server URL is missing. Please verify server configuration.');
+        }
+
+        await room.connect(url, token);
         console.log('Admin connected to LiveKit room:', room.name);
         setIsLoading(false);
 
@@ -408,7 +306,7 @@ const LiveMonitoring = ({ examId: propExamId }) => {
       }
       cleanup();
     };
-  }, [examId, cleanup, cleanupOldConnection, handleIncomingStream, startRecordingStream]);
+  }, [examId, cleanup, cleanupOldConnection, handleIncomingStream, parseParticipantIdentity]);
 
   // Toggle mute for a student's stream
   const toggleMute = useCallback((studentId) => {

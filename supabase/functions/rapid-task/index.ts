@@ -38,12 +38,12 @@ const handler: ServeHandler = async (req: Request) => {
       name: studentName || "Student",
     });
 
-    // Set permissions
+    // Set permissions: publishers (students) publish media; subscribers (admins) subscribe
     at.addGrant({
       roomJoin: true,
       room: roomName,
       canPublish: !!isPublisher,
-      canSubscribe: true,
+      canSubscribe: !isPublisher,
       canPublishData: true,
     });
 

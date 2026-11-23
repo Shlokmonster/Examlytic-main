@@ -129,6 +129,7 @@ function App() {
       <Route path="/exam/attempt/:id" element={<ExamAttempt />} />
       {/* Exam Redirect Route */}
       <Route path="/exam-redirect" element={<ExamRedirect />} />
+      <Route path="/exam-redirect/:id" element={<ExamRedirect />} />
       {/* Exam Done Route */}
       <Route path="/examdone" element={<Examdone />} />
 
