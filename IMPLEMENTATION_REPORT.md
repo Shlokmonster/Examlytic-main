@@ -78,3 +78,4 @@ Key additions:
    - **Completed Examinations**
 2. **Supabase Realtime Channel Integration:** Replaced 10-second polling storm with `postgres_changes` realtime subscriptions on `exam_attempts` and `exam_flags` with proper unmount cleanup.
 3. **Student Activity Timeline:** Built `StudentSessionTimeline.jsx` rendering chronological session events with severity badges, category filtering (Session, Stream, Anomaly, Proctoring), and search capabilities.
+

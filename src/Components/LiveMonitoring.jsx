@@ -119,6 +119,46 @@ const LiveMonitoring = ({ examId: propExamId }) => {
     }
   }, []);
 
+  // Clean up old connection
+  const cleanupOldConnection = useCallback((studentId) => {
+    console.log('Cleaning up connection for student:', studentId);
+    
+    // Close connection
+    if (connections.current[studentId]) {
+      try {
+        const conn = connections.current[studentId];
+        conn.off('stream');
+        conn.off('close');
+        conn.off('error');
+        conn.close();
+        delete connections.current[studentId];
+      } catch (e) {
+        console.error('Error closing connection:', e);
+      }
+    }
+
+    // Stop media stream
+    if (mediaStreams.current[studentId]) {
+      mediaStreams.current[studentId].getTracks().forEach(track => {
+        track.stop();
+        track.onended = null;
+      });
+      delete mediaStreams.current[studentId];
+    }
+
+    // Clear video element
+    if (videoRefs.current[studentId]) {
+      const video = videoRefs.current[studentId];
+      if (video.srcObject) {
+        video.srcObject = null;
+      }
+      delete videoRefs.current[studentId];
+    }
+
+    // Update state
+    setStudents(prev => prev.filter(s => s.id !== studentId));
+  }, []);
+
   // Handle incoming streams
   const handleIncomingStream = useCallback((studentId, stream, studentName = 'Student') => {
     console.log('Received stream for student:', studentId, stream);
@@ -180,47 +220,7 @@ const LiveMonitoring = ({ examId: propExamId }) => {
         cleanupOldConnection(studentId);
       };
     });
-  }, []);
-
-  // Clean up old connection
-  const cleanupOldConnection = useCallback((studentId) => {
-    console.log('Cleaning up connection for student:', studentId);
-    
-    // Close connection
-    if (connections.current[studentId]) {
-      try {
-        const conn = connections.current[studentId];
-        conn.off('stream');
-        conn.off('close');
-        conn.off('error');
-        conn.close();
-        delete connections.current[studentId];
-      } catch (e) {
-        console.error('Error closing connection:', e);
-      }
-    }
-
-    // Stop media stream
-    if (mediaStreams.current[studentId]) {
-      mediaStreams.current[studentId].getTracks().forEach(track => {
-        track.stop();
-        track.onended = null;
-      });
-      delete mediaStreams.current[studentId];
-    }
-
-    // Clear video element
-    if (videoRefs.current[studentId]) {
-      const video = videoRefs.current[studentId];
-      if (video.srcObject) {
-        video.srcObject = null;
-      }
-      delete videoRefs.current[studentId];
-    }
-
-    // Update state
-    setStudents(prev => prev.filter(s => s.id !== studentId));
-  }, []);
+  }, [cleanupOldConnection]);
 
   // Initialize LiveKit connection
   useEffect(() => {
@@ -387,7 +387,6 @@ const LiveMonitoring = ({ examId: propExamId }) => {
 
   // Format log messages with detailed information
   const formatLogMessage = (log) => {
-    const timestamp = new Date(log.created_at).toLocaleTimeString();
     const details = log.event_details || {};
     
     switch(log.event_type) {
@@ -480,10 +479,13 @@ const LiveMonitoring = ({ examId: propExamId }) => {
         {isLogsOpen && (
           <div className="logs-section">
             <div className="logs-header">
-              <h3>🔍 Activity Monitor (Last 3 mins)</h3>
+              <h3>🔍 Activity Monitor {selectedStudent ? `(Student ${selectedStudent.substring(0, 8)})` : '(Recent Events)'}</h3>
               <button 
                 className="close-logs"
-                onClick={() => setIsLogsOpen(false)}
+                onClick={() => {
+                  setIsLogsOpen(false);
+                  setSelectedStudent(null);
+                }}
                 title="Close logs"
               >
                 ×

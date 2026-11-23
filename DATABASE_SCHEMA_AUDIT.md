@@ -108,3 +108,4 @@ To guarantee zero data loss and prevent migration crashes:
    * `status = CASE WHEN submitted_at IS NOT NULL THEN 'completed' WHEN created_at < NOW() - INTERVAL '1 day' THEN 'expired' ELSE 'in_progress' END`
    * `last_heartbeat_at = COALESCE(submitted_at, created_at)`
 3. Backfill legacy `exam_logs.exam_attempt_id` using deterministic matching: `l.student_id = a.student_id AND (l.event_details->>'exam_id')::uuid = a.exam_id`.
+

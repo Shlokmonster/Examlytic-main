@@ -11,43 +11,7 @@ import * as cocoSsd from '@tensorflow-models/coco-ssd';
 import * as tf from '@tensorflow/tfjs';
 import { uploadToCloudinary } from "../utils/cloudinary";
 import Loader from "../Components/common/Loader";
-
-// Function to log exam events
-const logExamEvent = async (examAttemptId, studentId, eventType, eventDetails = {}) => {
-  const timestamp = new Date().toISOString();
-  const logData = {
-    timestamp,
-    examAttemptId,
-    studentId,
-    eventType,
-    ...eventDetails
-  };
-  
-  // Log to console for debugging
-  console.log(`[Exam Monitor] ${eventType}`, logData);
-  
-  try {
-    // Log to Supabase
-    const { data, error } = await supabase
-      .from('exam_logs')
-      .insert([
-        { 
-          exam_attempt_id: examAttemptId,
-          student_id: studentId,
-          event_type: eventType,
-          event_details: eventDetails
-        }
-      ]);
-
-    if (error) {
-      console.error('[Exam Monitor] Error logging to Supabase:', error);
-    } else {
-      console.log(`[Exam Monitor] Successfully logged ${eventType} to Supabase`);
-    }
-  } catch (error) {
-    console.error('[Exam Monitor] Error in logExamEvent:', error);
-  }
-};
+import { toast } from 'react-toastify';
 
 export default function ExamAttempt() {
   const { id: examId } = useParams()
@@ -65,8 +29,6 @@ export default function ExamAttempt() {
   const canvasRef = useRef()
   const webcamStreamRef = useRef(null)
   const screenStreamRef = useRef(null)
-  const manualMediaRecorderRef = useRef(null)
-  const recordedChunks = useRef([])
   const isInitializingAttempt = useRef(false)
   const onStopResolver = useRef(null)
   const isDisposedRef = useRef(false)
@@ -77,11 +39,8 @@ export default function ExamAttempt() {
   const lastLogTime = useRef(Date.now())
   const logCooldown = 5000 // 5 seconds cooldown between logs for the same event
   const roomRef = useRef(null)
-  const [peerId] = useState(`student-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`)
-  const adminPeerId = 'admin-dashboard';
   const [connectionStatus, setConnectionStatus] = useState('Connecting...');
   const [isScreenSharing, setIsScreenSharing] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
   const reconnectAttempts = useRef(0);
   const maxReconnectAttempts = 5;
   const [recordingUrl, setRecordingUrl] = useState(null);
@@ -90,7 +49,6 @@ export default function ExamAttempt() {
   const [detectionRunning, setDetectionRunning] = useState(false);
   const detectionRunningRef = useRef(false);
   const [flags, setFlags] = useState([]);
-  const [lastFlagTime, setLastFlagTime] = useState(0);
   const [flaggedQuestions, setFlaggedQuestions] = useState({});
   const [notes, setNotes] = useState('');
   const lastFaceDetectionTimeRef = useRef(0);
@@ -102,6 +60,7 @@ export default function ExamAttempt() {
     return () => clearInterval(timer);
   }, []);
   const flagCooldown = 30000; // 30 seconds cooldown between flags of same type
+  const lastFlagTimers = useRef({});
   const suspiciousObjects = ['cell phone', 'book', 'laptop', 'tv', 'remote', 'mouse', 'keyboard'];
   const lastObjectDetection = useRef(0);
   const objectDetectionCooldown = 30000; // 30 seconds between object detection checks
@@ -197,7 +156,7 @@ export default function ExamAttempt() {
       
       // Test Supabase connection first
       console.log('Testing Supabase connection...');
-      const { data: testData, error: testError } = await supabase
+      const { error: testError } = await supabase
         .from('exam_flags')
         .select('id')
         .limit(1);
@@ -334,7 +293,7 @@ export default function ExamAttempt() {
           
           result.faceLandmarks.forEach(landmarks => {
             // Draw all mesh points
-            landmarks.forEach((pt, pIdx) => {
+            landmarks.forEach((pt) => {
               const px = pt.x * canvas.width;
               const py = pt.y * canvas.height;
               ctx.beginPath();
@@ -498,18 +457,16 @@ export default function ExamAttempt() {
   
   // Configure react-media-recorder with optimized settings
   const [recordingBlob, setRecordingBlob] = useState(null);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [isUploading, setIsUploading] = useState(false);
-  const [recordingReady, setRecordingReady] = useState(false);
-  const [uploadWarning, setUploadWarning] = useState(null);
+  const [_isRecording, setIsRecording] = useState(false);
+  const [_recordingReady, setRecordingReady] = useState(false);
+  const [uploadProgress, _setUploadProgress] = useState(0);
+  const [isUploading, _setIsUploading] = useState(false);
+  const [uploadWarning, _setUploadWarning] = useState(null);
 
   const {
     status,
     startRecording,
-    stopRecording,
-    mediaBlobUrl,
-    clearBlobUrl,
-    error: recordingError
+    stopRecording
   } = useReactMediaRecorder({
     screen: true,
     video: {
@@ -892,13 +849,13 @@ export default function ExamAttempt() {
           .is('submitted_at', null)
           .maybeSingle();
 
-        let activeAttemptId = null;
+        let _activeAttemptId = null;
         let loadedAnswers = {};
         let attemptStartTime = Date.now();
 
         if (existingAttempt) {
           console.log('Resuming active attempt:', existingAttempt.id);
-          activeAttemptId = existingAttempt.id;
+          _activeAttemptId = existingAttempt.id;
           currentAttemptIdRef.current = existingAttempt.id;
           setExamAttemptId(existingAttempt.id);
           attemptStartTime = new Date(existingAttempt.started_at || existingAttempt.created_at).getTime();
@@ -919,7 +876,7 @@ export default function ExamAttempt() {
 
           if (doubleCheckAttempt) {
             console.log('Race condition prevented, resuming verified attempt:', doubleCheckAttempt.id);
-            activeAttemptId = doubleCheckAttempt.id;
+            _activeAttemptId = doubleCheckAttempt.id;
             currentAttemptIdRef.current = doubleCheckAttempt.id;
             setExamAttemptId(doubleCheckAttempt.id);
             attemptStartTime = new Date(doubleCheckAttempt.started_at || doubleCheckAttempt.created_at).getTime();
@@ -968,13 +925,13 @@ export default function ExamAttempt() {
                 isInitializingAttempt.current = false;
                 throw new Error('Could not initialize exam session on the server. Please try again.');
               }
-              activeAttemptId = fallbackAttempt.id;
+              _activeAttemptId = fallbackAttempt.id;
               currentAttemptIdRef.current = fallbackAttempt.id;
               setExamAttemptId(fallbackAttempt.id);
               attemptStartTime = new Date(fallbackAttempt.created_at).getTime();
             } else {
               console.log('Created new exam attempt in DB:', newAttempt.id);
-              activeAttemptId = newAttempt.id;
+              _activeAttemptId = newAttempt.id;
               currentAttemptIdRef.current = newAttempt.id;
               setExamAttemptId(newAttempt.id);
               attemptStartTime = new Date(newAttempt.started_at || newAttempt.created_at).getTime();
@@ -1020,33 +977,6 @@ export default function ExamAttempt() {
       }
     }
 
-    const setupWebcam = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true })
-        if (videoRef.current) videoRef.current.srcObject = stream
-      } catch (err) {
-        console.error("Webcam error:", err)
-      }
-    }
-
-    // Function to get the best supported MIME type
-    const getSupportedMimeType = () => {
-      const types = [
-        'video/mp4;codecs=h264,aac',  // MP4 with H.264 video and AAC audio
-        'video/webm;codecs=h264,opus', // WebM with H.264 video and Opus audio
-        'video/webm;codecs=vp9,opus',  // WebM with VP9 video and Opus audio
-        'video/webm;codecs=vp8,opus',  // WebM with VP8 video and Opus audio
-        'video/webm'                   // Fallback to default WebM
-      ];
-
-      return types.find(type => MediaRecorder.isTypeSupported(type)) || '';
-    };
-
-    const handleTabSwitch = () => {}
-    document.addEventListener("visibilitychange", () => {
-      if (document.hidden) handleTabSwitch()
-    })
-
     loadExam();
     
     // Initialize WebRTC and screen recording
@@ -1078,10 +1008,6 @@ export default function ExamAttempt() {
     }, 10000);
 
     return () => {
-      document.removeEventListener("visibilitychange", () => {
-        if (document.hidden) handleTabSwitch()
-      });
-      
       // Clean up resources
       cleanupResources();
       clearInterval(statusInterval);
@@ -1175,7 +1101,7 @@ export default function ExamAttempt() {
     if (currentQuestionIndex > 0) setCurrentQuestionIndex(prev => prev - 1)
   }
 
-  const [logs, setLogs] = useState([]);
+  const [_logs, setLogs] = useState([]);
 
   // Log event locally and to Supabase with valid attempt reference
   const logEvent = async (eventType, eventDetails = {}) => {
@@ -1434,7 +1360,7 @@ export default function ExamAttempt() {
   const calculateScore = (answers, questions) => {
     if (!answers || !questions || !questions.length) return 0;
     let correct = 0;
-    questions.forEach((q, index) => {
+    questions.forEach((q) => {
       if (q.correct_answer === answers[q.id]) {
         correct++;
       }
@@ -1583,7 +1509,6 @@ export default function ExamAttempt() {
     setError(null);
 
     let user = null;
-    let examQuestions = [];
     let currentAttemptId = examAttemptId; // Store the current attempt ID
 
     try {

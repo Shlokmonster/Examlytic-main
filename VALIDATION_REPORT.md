@@ -28,3 +28,4 @@
 2. **LocalStorage Cleanup:** Removing `saveStreamToLocalStorage()` and the `localStorage.setItem('studentRecordings')` calls from `LiveMonitoring.jsx` completely eliminates F-02 with zero impact on the Cloudinary recording workflow.
 3. **Identity Token Standard:** Changing the identity format in `supabase/functions/rapid-task/index.ts` and `ExamAttempt.jsx` to `student:::{attemptId}:::{studentId}` eliminates F-03.
 4. **Logging Fix:** Setting `exam_attempt_id: examAttemptId` in `ExamAttempt.jsx` directly resolves F-05, populating the per-student logs view in the Admin Dashboard.
+

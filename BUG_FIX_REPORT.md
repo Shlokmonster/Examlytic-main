@@ -47,3 +47,4 @@
 - **Files:** `src/Components/LiveMonitoring.jsx`, `src/Pages/ExamAttempt.jsx`, `supabase/functions/rapid-task/index.ts`
 - **Root Cause:** Code used `identity.split('-')` to parse participant identities formatted as `student-${attemptId}-${studentId}`. Since standard RFC 4122 UUIDs contain 4 hyphens (e.g. `550e8400-e29b-41d4-a716-446655440000`), `split('-')[1]` produced only `550e8400`.
 - **Fix:** Replaced single hyphens with triple underscores: `student___${attemptId}___${studentId}`. Added a robust parser with backward-compatibility for legacy single-hyphen and raw UUID formats.
+

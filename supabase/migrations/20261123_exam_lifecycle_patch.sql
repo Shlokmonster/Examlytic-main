@@ -71,3 +71,4 @@ BEGIN
     AND status IN ('in_progress', 'interrupted');
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
+

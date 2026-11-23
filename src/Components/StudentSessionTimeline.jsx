@@ -227,3 +227,4 @@ const StudentSessionTimeline = ({ attempt, logs = [], flags = [] }) => {
 };
 
 export default StudentSessionTimeline;
+
