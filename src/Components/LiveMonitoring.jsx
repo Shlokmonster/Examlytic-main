@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { Room, RoomEvent } from 'livekit-client';
+import { fetchLiveKitToken } from '../services/examService';
 import { FaVolumeUp, FaVolumeMute, FaExpand, FaCompress, FaUser, FaExclamationTriangle, FaInfoCircle, FaDesktop } from 'react-icons/fa';
 import supabase from '../SupabaseClient';
 
@@ -231,26 +232,12 @@ const LiveMonitoring = ({ examId: propExamId }) => {
         setIsLoading(true);
         setError(null);
 
-        // Fetch LiveKit subscriber token
-        const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/rapid-task`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
-            'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`
-          },
-          body: JSON.stringify({
-            roomName: `exam-${examId}`,
-            participantName: `admin-${Date.now()}`,
-            isPublisher: false
-          })
+        // Fetch LiveKit subscriber token via centralized exam service
+        const { token, url } = await fetchLiveKitToken({
+          roomName: `exam-${examId}`,
+          participantName: `admin-${Date.now()}`,
+          isPublisher: false,
         });
-
-        if (!response.ok) {
-          throw new Error('Failed to fetch streaming credentials');
-        }
-
-        const { token, url } = await response.json();
 
         const room = new Room();
         activeRoom = room;

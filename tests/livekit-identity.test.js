@@ -81,3 +81,4 @@ describe('LiveKit Identity & Room Isolation Security', () => {
     assert.strictEqual(validateRequest({ roomName: 'room-1', participantName: 'p-1' }).valid, true);
   });
 });
+

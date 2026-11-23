@@ -12,6 +12,7 @@ import * as tf from '@tensorflow/tfjs';
 import { uploadToCloudinary } from "../utils/cloudinary";
 import Loader from "../Components/common/Loader";
 import { toast } from 'react-toastify';
+import { fetchLiveKitToken, sendStudentHeartbeat } from "../services/examService";
 
 export default function ExamAttempt() {
   const { id: examId } = useParams()
@@ -553,26 +554,12 @@ export default function ExamAttempt() {
       const { data: { user } } = await supabase.auth.getUser();
       const resolvedStudentName = user?.user_metadata?.full_name || user?.email || 'Student';
       
-      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/rapid-task`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
-          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`
-        },
-        body: JSON.stringify({
-          roomName: `exam-${examId}`,
-          participantName: `student___${currentAttemptIdRef.current || examAttemptId || 'attempt'}___${studentId || user?.id || 'unknown'}`,
-          studentName: resolvedStudentName,
-          isPublisher: true
-        })
+      const { token, url } = await fetchLiveKitToken({
+        roomName: `exam-${examId}`,
+        participantName: `student___${currentAttemptIdRef.current || examAttemptId || 'attempt'}___${studentId || user?.id || 'unknown'}`,
+        studentName: resolvedStudentName,
+        isPublisher: true,
       });
-
-      if (!response.ok) {
-        throw new Error('Failed to get LiveKit token from server');
-      }
-
-      const { token, url } = await response.json();
 
       if (!url) {
         throw new Error('LiveKit streaming server URL is missing from server response. Please verify configuration.');
@@ -1054,16 +1041,7 @@ export default function ExamAttempt() {
             ? 'STREAM_RECONNECTING'
             : 'STREAM_DISCONNECTED';
 
-        const nowIso = new Date().toISOString();
-        await supabase
-          .from('exam_attempts')
-          .update({
-            last_heartbeat_at: nowIso,
-            stream_status: streamState,
-            status: 'in_progress'
-          })
-          .eq('id', examAttemptId)
-          .is('submitted_at', null);
+        await sendStudentHeartbeat(examAttemptId, streamState);
       } catch (err) {
         console.warn('[Heartbeat] Ping notice (non-fatal):', err);
       }

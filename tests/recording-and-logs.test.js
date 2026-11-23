@@ -45,3 +45,4 @@ describe('Recording Pipeline & Event Log Association', () => {
     assert.strictEqual(result.success, true);
   });
 });
+

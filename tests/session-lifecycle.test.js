@@ -76,3 +76,4 @@ describe('Exam Session Lifecycle & Server-Authoritative Timer', () => {
     assert.strictEqual(score, 75); // 3 of 4 correct
   });
 });
+
