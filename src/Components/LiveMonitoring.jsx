@@ -206,10 +206,14 @@ const LiveMonitoring = ({ examId: propExamId }) => {
     if (videoRefs.current[studentId]) {
       setupVideo();
     } else {
+      let attempts = 0;
       const checkVideoRef = setInterval(() => {
+        attempts++;
         if (videoRefs.current[studentId]) {
           clearInterval(checkVideoRef);
           setupVideo();
+        } else if (attempts > 30) {
+          clearInterval(checkVideoRef);
         }
       }, 100);
     }

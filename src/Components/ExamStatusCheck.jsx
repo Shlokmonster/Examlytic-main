@@ -33,7 +33,7 @@ function ExamStatusCheck() {
           .from('exams')
           .select('*')
           .eq('id', id)
-          .single();
+          .maybeSingle();
 
         if (fetchError) throw fetchError;
         if (!data) {

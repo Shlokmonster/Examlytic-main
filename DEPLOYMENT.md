@@ -22,10 +22,10 @@ Following this sequence guarantees that the frontend, backend RPCs, security tri
 Before deploying, verify that your local environment is healthy and all automated tests pass:
 
 ```bash
-# 1. Run all 36 automated unit, security, and concurrency tests
+# 1. Run all 49 automated unit, security, and concurrency tests
 npm test
 
-# 2. Check for code syntax and lint issues (must have 0 errors)
+# 2. Check for code syntax and lint issues (must have 0 errors, 0 warnings)
 npx eslint src/
 
 # 3. Test production bundle build
@@ -33,9 +33,9 @@ npm run build
 ```
 
 Expected result:
-- **36/36 tests passing** across 7 test suites.
-- **0 errors** in ESLint.
-- Vite build completes and generates output in `./dist/`.
+- **49/49 tests passing** across 10 test suites.
+- **0 errors, 0 warnings** in ESLint.
+- Vite build completes cleanly and generates output in `./dist/`.
 
 ---
 

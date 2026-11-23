@@ -25,6 +25,8 @@ export default function ExamAttempt() {
   const [timeLeft, setTimeLeft] = useState(5400)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
+  const [isExamLoaded, setIsExamLoaded] = useState(false)
+  const [isExamExpired, setIsExamExpired] = useState(false)
   const [error, setError] = useState(null)
   const videoRef = useRef()
   const canvasRef = useRef()
@@ -557,10 +559,12 @@ export default function ExamAttempt() {
       
       const { data: { user } } = await supabase.auth.getUser();
       const resolvedStudentName = user?.user_metadata?.full_name || user?.email || 'Student';
-      
+      const effectiveAttemptId = currentAttemptIdRef.current || examAttemptId || 'attempt';
+      const effectiveStudentId = studentId || user?.id || 'unknown';
+
       const { token, url } = await fetchLiveKitToken({
         roomName: `exam-${examId}`,
-        participantName: `student___${currentAttemptIdRef.current || examAttemptId || 'attempt'}___${studentId || user?.id || 'unknown'}`,
+        participantName: `student___${effectiveAttemptId}___${effectiveStudentId}`,
         studentName: resolvedStudentName,
         isPublisher: true,
       });
@@ -593,7 +597,31 @@ export default function ExamAttempt() {
       reconnectAttempts.current = 0;
       roomRef.current = room;
 
-      // Now start screen share and publish track
+      // 1. Immediately publish webcam video track for proctor live monitoring
+      try {
+        let webcamStream = webcamStreamRef.current;
+        if (!webcamStream || webcamStream.getVideoTracks().length === 0 || !webcamStream.active) {
+          webcamStream = await setupWebcamStream();
+        }
+        if (webcamStream && webcamStream.getVideoTracks().length > 0) {
+          const cameraTrack = webcamStream.getVideoTracks()[0];
+          console.log('[LiveKit] Publishing student camera track...');
+          await room.localParticipant.publishTrack(cameraTrack, { name: 'camera' });
+        }
+      } catch (camErr) {
+        console.warn('[LiveKit] Could not publish camera track:', camErr);
+      }
+
+      // 2. Notify backend that the stream is now connected
+      if (effectiveAttemptId && effectiveAttemptId !== 'attempt') {
+        try {
+          await sendStudentHeartbeat(effectiveAttemptId, 'STREAM_CONNECTED');
+        } catch (hbErr) {
+          console.warn('[LiveKit] Initial heartbeat notice:', hbErr);
+        }
+      }
+
+      // 3. Start screen share and publish track (non-blocking)
       try {
         let stream = screenStreamRef.current;
         if (!stream || stream.getVideoTracks().length === 0 || !stream.active) {
@@ -605,45 +633,35 @@ export default function ExamAttempt() {
               height: { ideal: 720, max: 720 },
               frameRate: { ideal: 10, max: 15 }
             },
-            audio: {
-              echoCancellation: true,
-              noiseSuppression: true,
-              sampleRate: 44100
-            }
+            audio: false
           };
 
           stream = await navigator.mediaDevices.getDisplayMedia(constraints).catch(err => {
-            console.warn('Error with system audio, trying without:', err);
-            return navigator.mediaDevices.getDisplayMedia({
-              video: true,
-              audio: false
-            });
+            console.warn('[LiveKit] Screen sharing dismissed or not permitted:', err);
+            return null;
           });
 
-          screenStreamRef.current = stream;
-        } else {
-          console.log('Reusing existing active screen share stream');
+          if (stream) {
+            screenStreamRef.current = stream;
+          }
         }
 
-        setIsScreenSharing(true);
-        setConnectionStatus('Screen sharing active');
+        if (stream && stream.getVideoTracks().length > 0) {
+          setIsScreenSharing(true);
+          setConnectionStatus('Screen sharing active');
 
-        const videoTrack = stream.getVideoTracks()[0];
-        if (videoTrack) {
+          const videoTrack = stream.getVideoTracks()[0];
           await room.localParticipant.publishTrack(videoTrack, { name: 'screen-share' });
+
+          videoTrack.onended = () => {
+            console.log('[LiveKit] Screen sharing track ended');
+            setIsScreenSharing(false);
+            setConnectionStatus('Screen sharing ended by user');
+            stopAllTracks(stream);
+          };
         }
-
-        // Handle track ended (user stops sharing)
-        videoTrack.onended = () => {
-          console.log('Screen sharing track ended');
-          setIsScreenSharing(false);
-          setConnectionStatus('Screen sharing ended by user');
-          stopAllTracks(stream);
-        };
-
       } catch (err) {
-        console.error('Error starting screen share:', err);
-        setConnectionStatus('Screen sharing permission denied or failed');
+        console.warn('[LiveKit] Screen share setup note (camera feed active):', err);
       }
 
     } catch (error) {
@@ -653,7 +671,7 @@ export default function ExamAttempt() {
       setTimeout(setupPeerConnection, 2000);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [examId, studentId]);
+  }, [examId, studentId, examAttemptId]);
 
   // Stop all tracks in a stream
   const stopAllTracks = (stream) => {
@@ -808,16 +826,16 @@ export default function ExamAttempt() {
 
   useEffect(() => {
     const loadExam = async () => {
-      setIsLoading(true)
-      setError(null)
+      setIsLoading(true);
+      setError(null);
       try {
         if (isInitializingAttempt.current) {
           console.log('Already initializing exam attempt, skipping concurrent loadExam call.');
-          return;
+          return false;
         }
         isInitializingAttempt.current = true;
 
-        // Authenticate student
+        // 1. Authenticate student
         const { data: { user }, error: userError } = await supabase.auth.getUser();
         if (userError || !user) {
           isInitializingAttempt.current = false;
@@ -825,7 +843,36 @@ export default function ExamAttempt() {
         }
         setStudentId(user.id);
 
-        // Check for an active (unsubmitted) attempt for this student and exam
+        // 2. Fetch sanitized exam configuration via secure RPC
+        const examData = await fetchExamDetails(examId);
+        setExam(examData);
+
+        if (!examData || !examData.questions || !Array.isArray(examData.questions) || examData.questions.length === 0) {
+          isInitializingAttempt.current = false;
+          setError('No questions found in this exam.');
+          return false;
+        }
+
+        const durationMinutes = Number(examData.duration_minutes) || 90;
+        const durationSeconds = durationMinutes * 60;
+
+        // 3. Check if student already submitted or completed an attempt for this exam
+        const { data: completedAttempt } = await supabase
+          .from('exam_attempts')
+          .select('id, submitted_at, completed_at, status')
+          .eq('exam_id', examId)
+          .eq('student_id', user.id)
+          .or('submitted_at.not.is.null,completed_at.not.is.null,status.eq.completed')
+          .maybeSingle();
+
+        if (completedAttempt) {
+          console.log('Student has already submitted this exam, redirecting to completion page...');
+          isInitializingAttempt.current = false;
+          navigate(`/exam/${examId}/done`, { replace: true });
+          return false;
+        }
+
+        // 4. Check for an active (unsubmitted) attempt for this student and exam
         const { data: existingAttempt } = await supabase
           .from('exam_attempts')
           .select('id, answers, created_at, started_at, status')
@@ -839,11 +886,32 @@ export default function ExamAttempt() {
         let attemptStartTime = Date.now();
 
         if (existingAttempt) {
-          console.log('Resuming active attempt:', existingAttempt.id);
+          const startTime = new Date(existingAttempt.started_at || existingAttempt.created_at).getTime();
+          const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startTime) / 1000));
+          const remainingSeconds = durationSeconds - elapsedSeconds;
+
+          // Guard against stale/expired attempts auto-submitting empty answers on start
+          if (remainingSeconds <= 0 || existingAttempt.status === 'expired') {
+            console.warn('[Exam Lifecycle] Existing attempt has expired. Blocking phantom auto-submit.');
+            await supabase
+              .from('exam_attempts')
+              .update({ status: 'expired' })
+              .eq('id', existingAttempt.id);
+
+            setIsExamExpired(true);
+            setIsLoading(false);
+            isInitializingAttempt.current = false;
+            return false;
+          }
+
+          console.log('Resuming active in-flight attempt:', existingAttempt.id);
           _activeAttemptId = existingAttempt.id;
           currentAttemptIdRef.current = existingAttempt.id;
           setExamAttemptId(existingAttempt.id);
-          attemptStartTime = new Date(existingAttempt.started_at || existingAttempt.created_at).getTime();
+          attemptStartTime = startTime;
+          expiresAtRef.current = startTime + (durationSeconds * 1000);
+          setTimeLeft(remainingSeconds);
+
           if (existingAttempt.answers) {
             loadedAnswers = existingAttempt.answers;
             setAnswers(existingAttempt.answers);
@@ -860,11 +928,30 @@ export default function ExamAttempt() {
             .maybeSingle();
 
           if (doubleCheckAttempt) {
+            const startTime = new Date(doubleCheckAttempt.started_at || doubleCheckAttempt.created_at).getTime();
+            const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startTime) / 1000));
+            const remainingSeconds = durationSeconds - elapsedSeconds;
+
+            if (remainingSeconds <= 0 || doubleCheckAttempt.status === 'expired') {
+              await supabase
+                .from('exam_attempts')
+                .update({ status: 'expired' })
+                .eq('id', doubleCheckAttempt.id);
+
+              setIsExamExpired(true);
+              setIsLoading(false);
+              isInitializingAttempt.current = false;
+              return false;
+            }
+
             console.log('Race condition prevented, resuming verified attempt:', doubleCheckAttempt.id);
             _activeAttemptId = doubleCheckAttempt.id;
             currentAttemptIdRef.current = doubleCheckAttempt.id;
             setExamAttemptId(doubleCheckAttempt.id);
-            attemptStartTime = new Date(doubleCheckAttempt.started_at || doubleCheckAttempt.created_at).getTime();
+            attemptStartTime = startTime;
+            expiresAtRef.current = startTime + (durationSeconds * 1000);
+            setTimeLeft(remainingSeconds);
+
             if (doubleCheckAttempt.answers) {
               loadedAnswers = doubleCheckAttempt.answers;
               setAnswers(doubleCheckAttempt.answers);
@@ -914,74 +1001,66 @@ export default function ExamAttempt() {
               currentAttemptIdRef.current = fallbackAttempt.id;
               setExamAttemptId(fallbackAttempt.id);
               attemptStartTime = new Date(fallbackAttempt.created_at).getTime();
+              expiresAtRef.current = attemptStartTime + (durationSeconds * 1000);
+              setTimeLeft(durationSeconds);
             } else {
               console.log('Created new exam attempt in DB:', newAttempt.id);
               _activeAttemptId = newAttempt.id;
               currentAttemptIdRef.current = newAttempt.id;
               setExamAttemptId(newAttempt.id);
               attemptStartTime = new Date(newAttempt.started_at || newAttempt.created_at).getTime();
+              expiresAtRef.current = attemptStartTime + (durationSeconds * 1000);
+              setTimeLeft(durationSeconds);
             }
           }
           isInitializingAttempt.current = false;
         }
 
-        // Fetch sanitized exam configuration via secure RPC
-        const examData = await fetchExamDetails(examId);
-        setExam(examData);
+        // Format and set questions
+        const formattedQuestions = examData.questions.map((q, index) => ({
+          id: q.id || `q-${index}`,
+          question_text: q.question || q.question_text || '',
+          options: q.type === 'mcq' ? [q.optionA, q.optionB, q.optionC, q.optionD].filter(Boolean) : (q.options || []),
+          marks: q.marks || 1,
+          type: q.type || 'mcq',
+        }));
+        setQuestions(formattedQuestions);
+        
+        // Re-initialize answers if not loaded from active attempt
+        const initialAnswers = {};
+        formattedQuestions.forEach(q => {
+          initialAnswers[q.id] = loadedAnswers[q.id] !== undefined ? loadedAnswers[q.id] : '';
+        });
+        setAnswers(initialAnswers);
 
-        if (examData.questions && Array.isArray(examData.questions)) {
-          const formattedQuestions = examData.questions.map((q, index) => ({
-            id: q.id || `q-${index}`,
-            question_text: q.question || q.question_text || '',
-            options: q.type === 'mcq' ? [q.optionA, q.optionB, q.optionC, q.optionD].filter(Boolean) : (q.options || []),
-            marks: q.marks || 1,
-            type: q.type || 'mcq',
-          }));
-          setQuestions(formattedQuestions);
-          
-          // Re-initialize answers if not loaded from active attempt
-          const initialAnswers = {};
-          formattedQuestions.forEach(q => {
-            initialAnswers[q.id] = loadedAnswers[q.id] !== undefined ? loadedAnswers[q.id] : '';
-          });
-          setAnswers(initialAnswers);
-          
-          // Authoritative timer calculation based on started_at and duration_minutes
-          const durationMinutes = Number(examData.duration_minutes) || 90;
-          const durationSeconds = durationMinutes * 60;
-          const elapsedSeconds = Math.max(0, Math.floor((Date.now() - attemptStartTime) / 1000));
-          const remainingSeconds = Math.max(0, durationSeconds - elapsedSeconds);
-          
-          expiresAtRef.current = attemptStartTime + (durationSeconds * 1000);
-          setTimeLeft(remainingSeconds);
-        } else {
-          setError('No questions found in this exam.');
-        }
+        setIsExamLoaded(true);
+        return true;
       } catch (err) {
-        console.error(err)
-        setError(err.message || 'Failed to load exam.')
+        console.error(err);
+        setError(err.message || 'Failed to load exam.');
+        return false;
       } finally {
-        setIsLoading(false)
+        setIsLoading(false);
       }
-    }
+    };
 
-    loadExam();
-    
-    // Initialize WebRTC and screen recording
-    const init = async () => {
+    // Sequential startup: setup webcam -> load exam & attempt -> connect LiveKit & recorder
+    const startAssessment = async () => {
       try {
         isDisposedRef.current = false;
         await setupWebcamStream();
-        await setupPeerConnection();
-        console.log('Starting screen recording via react-media-recorder...');
-        startRecording();
-      } catch (error) {
-        console.error('Initialization error:', error);
-        setConnectionStatus(`Error: ${error.message}`);
+        const attemptReady = await loadExam();
+        if (attemptReady) {
+          await setupPeerConnection();
+          console.log('Starting screen recording via react-media-recorder...');
+          startRecording();
+        }
+      } catch (err) {
+        console.error('Assessment startup error:', err);
       }
     };
-    
-    init();
+
+    startAssessment();
     
     // Set up periodic status updates
     const statusInterval = setInterval(() => {
@@ -1008,16 +1087,17 @@ export default function ExamAttempt() {
       if (roomRef.current) {
         roomRef.current.disconnect();
       }
-    }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [examId])
+  }, [examId]);
 
+  // Authoritative Exam Countdown Timer
   useEffect(() => {
+    if (!isExamLoaded || !examAttemptId) return;
+
     if (timeLeft <= 0) {
-      if (examAttemptId) {
-        toast.info("Exam time has expired. Submitting your assessment...");
-        handleSubmit();
-      }
+      toast.info("Exam time has expired. Submitting your assessment...");
+      handleSubmit(null, { isAutoSubmit: true });
       return;
     }
     const timer = setInterval(() => {
@@ -1030,7 +1110,7 @@ export default function ExamAttempt() {
     }, 1000);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timeLeft, examAttemptId]);
+  }, [timeLeft, examAttemptId, isExamLoaded]);
 
   // 15-second heartbeat ping for session vitality
   useEffect(() => {
@@ -1068,8 +1148,12 @@ export default function ExamAttempt() {
   }
 
   const handleNextQuestion = () => {
-    if (currentQuestionIndex < questions.length - 1) setCurrentQuestionIndex(prev => prev + 1)
-    else handleSubmit()
+    if (!questions || questions.length === 0) return;
+    if (currentQuestionIndex < questions.length - 1) {
+      setCurrentQuestionIndex(prev => prev + 1);
+    } else {
+      handleSubmit();
+    }
   }
 
   const handlePreviousQuestion = () => {
@@ -1477,11 +1561,14 @@ export default function ExamAttempt() {
   };
 
   // On submit, save answers and all logs
-  const handleSubmit = async (e) => {
+  const handleSubmit = async (e, options = {}) => {
     if (e && typeof e.preventDefault === 'function') {
       e.preventDefault();
     }
-    if (!window.confirm("Are you sure you want to submit the exam? You cannot change your answers after submission.")) return;
+    const isAutoSubmit = options?.isAutoSubmit || false;
+    if (!isAutoSubmit) {
+      if (!window.confirm("Are you sure you want to submit the exam? You cannot change your answers after submission.")) return;
+    }
     
     setIsSubmitting(true);
     setError(null);
@@ -1637,7 +1724,50 @@ export default function ExamAttempt() {
       />
     );
   }
-  if (error) return <div>{error}</div>;
+  if (isExamExpired) {
+    return (
+      <div className="login-page" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div className="login-card" style={{ maxWidth: '480px', textAlign: 'center', padding: '32px' }}>
+          <div style={{ fontSize: '48px', marginBottom: '16px' }}>⏱️</div>
+          <h2 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#1F2937', marginBottom: '12px' }}>
+            Exam Session Expired
+          </h2>
+          <p style={{ color: '#4B5563', fontSize: '0.95rem', lineHeight: '1.5', marginBottom: '24px' }}>
+            The time limit for your exam session has lapsed. You can no longer submit answers for this attempt.
+          </p>
+          <button 
+            className="next-question-btn"
+            style={{ width: '100%', justifyContent: 'center' }}
+            onClick={() => navigate('/examcode')}
+          >
+            Return to Dashboard
+          </button>
+        </div>
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="login-page" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div className="login-card" style={{ maxWidth: '480px', textAlign: 'center', padding: '32px' }}>
+          <div style={{ fontSize: '48px', marginBottom: '16px' }}>⚠️</div>
+          <h2 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#DC2626', marginBottom: '12px' }}>
+            Unable to Load Exam
+          </h2>
+          <p style={{ color: '#4B5563', fontSize: '0.95rem', lineHeight: '1.5', marginBottom: '24px' }}>
+            {error}
+          </p>
+          <button 
+            className="next-question-btn"
+            style={{ width: '100%', justifyContent: 'center' }}
+            onClick={() => navigate('/examcode')}
+          >
+            Return to Dashboard
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // Status indicator component with improved styling and animations
   const StatusIndicator = () => {

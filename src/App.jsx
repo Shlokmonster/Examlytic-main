@@ -1,162 +1,191 @@
-import { Routes, Route, Navigate } from "react-router-dom"
-import { useEffect, useState } from "react"
-import supabase from "./SupabaseClient"
-import { useAuth } from "./hooks/useAuth"
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { useAuth } from "./hooks/useAuth";
+
 // Pages
-import Login from "./Pages/Login"
-import AdminDashboard from "./Pages/AdminDashboard"
-import CreateExam from "./Pages/CreateExam"
-import ExamIntro from "./Pages/ExamIntro"
-import ExamAttempt from "./Pages/ExamAttempt"
+import Login from "./Pages/Login";
+import AdminDashboard from "./Pages/AdminDashboard";
+import CreateExam from "./Pages/CreateExam";
+import ExamIntro from "./Pages/ExamIntro";
+import ExamAttempt from "./Pages/ExamAttempt";
 import ExamBlocked from "./Pages/ExamBlocked";
 import ExamStatusCheck from "./Components/ExamStatusCheck";
-import Examdone from "./Pages/Examdone"
+import Examdone from "./Pages/Examdone";
 import ExamRedirect from "./Pages/ExamRedirect";
 import Examcode from "./Pages/Examcode";
 import LiveMonitoring from "./Components/LiveMonitoring";
 import Diagnostics from "./Pages/Diagnostics";
 import Loader from "./Components/common/Loader";
 
-function App() {
-  console.log('App component rendering...');
-  const { user, loading } = useAuth()
-  const [role, setRole] = useState(null)
-  const [roleLoading, setRoleLoading] = useState(true)
+/**
+ * Route protection wrapper:
+ * - Shows loading state during initial session & role discovery
+ * - Preserves requested location URL if unauthenticated
+ * - Restricts access to role-gated routes
+ */
+function ProtectedRoute({ children, requiredRole }) {
+  const { user, role, loading } = useAuth();
+  const location = useLocation();
 
-  useEffect(() => {
-    console.log('Auth state changed - user:', user ? 'Logged in' : 'Not logged in');
-    
-    const fetchRole = async () => {
-      if (!user) {
-        console.log('No user, skipping role fetch');
-        setRoleLoading(false);
-        return;
-      }
-      
-      console.log('Fetching role for user:', user.email);
-      
-      try {
-        // First, check if user exists in our database using auth.uid()
-        const { data: userData, error } = await supabase
-          .from('users')
-          .select('id, role, email')
-          .eq('id', user.id)  // Match by ID first (more reliable)
-          .maybeSingle();
-
-        console.log('User lookup result:', { userData, error });
-
-        if (error || !userData) {
-          console.log('User not found by ID, trying by email...');
-          // Try to find by email as fallback
-          const { data: userByEmail, error: _emailError } = await supabase
-            .from('users')
-            .select('id, role, email')
-            .eq('email', user.email)
-            .maybeSingle();
-
-          if (userByEmail) {
-            console.log('Found user by email, updating ID if needed');
-            // Update the user's ID if it doesn't match
-            if (userByEmail.id !== user.id) {
-              await supabase
-                .from('users')
-                .update({ id: user.id })
-                .eq('email', user.email);
-            }
-            setRole(userByEmail.role || 'student');
-          } else {
-            console.log('Creating new user in database...');
-            // Create new user with all required fields
-            const { error: createError } = await supabase
-              .from('users')
-              .upsert({
-                id: user.id,
-                email: user.email,
-                role: 'student',
-                user_name: user.email.split('@')[0], // Default username from email
-                user_avatar: null
-              }, {
-                onConflict: 'email' // Handle case where email already exists
-              });
-
-            if (createError) {
-              console.error('Error creating user:', createError);
-              throw createError;
-            }
-            setRole('student');
-          }
-        } else {
-          console.log('User found with role:', userData.role);
-          setRole(userData.role || 'student');
-        }
-      } catch (err) {
-        console.error('Error in fetchRole:', err);
-        setRole('student'); // Default to student role on error
-      } finally {
-        setRoleLoading(false);
-      }
-    }
-
-    fetchRole()
-  }, [user])
-
-  console.log('App render state:', { loading, user, role, roleLoading });
-
-  if (loading || roleLoading) {
-    console.log('Showing loading state...');
-    return <Loader fullPage message="Loading application..." />;
+  if (loading) {
+    return <Loader fullPage message="Authenticating session..." />;
   }
-  
+
   if (!user) {
-    console.log('No user, redirecting to login');
-    return <Login />;
+    return <Navigate to="/login" state={{ from: location }} replace />;
   }
-  
-  if (!role) {
-    console.log('No role available, showing role loading state');
-    return <Loader fullPage message="Loading your user role... If this takes too long, please refresh the page." />;
+
+  if (requiredRole && role !== requiredRole) {
+    return <Navigate to={role === "admin" ? "/admin" : "/examcode"} replace />;
+  }
+
+  return children;
+}
+
+function App() {
+  const { user, role, loading } = useAuth();
+
+  if (loading) {
+    return <Loader fullPage message="Loading application..." />;
   }
 
   return (
     <Routes>
-      {/* Common Exam Routes */}
-      <Route path="/exam/:id" element={<ExamStatusCheck />}>
+      {/* Public / Authentication Route */}
+      <Route path="/login" element={<Login />} />
+
+      {/* Common Exam Routes (Accessible by authenticated users) */}
+      <Route
+        path="/exam/:id"
+        element={
+          <ProtectedRoute>
+            <ExamStatusCheck />
+          </ProtectedRoute>
+        }
+      >
         <Route index element={<ExamIntro />} />
         <Route path="attempt" element={<ExamAttempt />} />
         <Route path="blocked" element={<ExamBlocked />} />
       </Route>
-      <Route path="/exam/attempt/:id" element={<ExamAttempt />} />
-      {/* Exam Redirect Route */}
-      <Route path="/exam-redirect" element={<ExamRedirect />} />
-      <Route path="/exam-redirect/:id" element={<ExamRedirect />} />
-      {/* Exam Done Route */}
-      <Route path="/examdone" element={<Examdone />} />
 
-      {/* Admin Routes */}
-      {role === "admin" && (
-        <>
-          <Route path="/" element={<Navigate to="/admin" replace />} />
-          <Route path="/admin" element={<AdminDashboard />} />
-          <Route path="/admin/monitor/:examId" element={<AdminDashboard />} />
-          <Route path="/monitor/:examId" element={<LiveMonitoring />} />
-          <Route path="/create-exam" element={<CreateExam />} />
-          <Route path="*" element={<Navigate to="/admin" replace />} />
-        </>
-      )}
+      <Route
+        path="/exam/attempt/:id"
+        element={
+          <ProtectedRoute>
+            <ExamAttempt />
+          </ProtectedRoute>
+        }
+      />
 
-      {/* Student Routes */}
-      {role === "student" && (
-        <>
-          <Route path="/examcode" element={<Examcode />} />
-          <Route path="/diagnostics/:examCode" element={<Diagnostics />} />
-          <Route path="/exam" element={<Navigate to="/examcode" replace />} />
-          <Route path="/exam/:examId/done" element={<Examdone />} />
-          <Route path="/" element={<Navigate to="/examcode" replace />} />
-          <Route path="*" element={<Navigate to="/examcode" replace />} />
-        </>
-      )}
+      <Route
+        path="/exam-redirect"
+        element={
+          <ProtectedRoute>
+            <ExamRedirect />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/exam-redirect/:id"
+        element={
+          <ProtectedRoute>
+            <ExamRedirect />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/examdone"
+        element={
+          <ProtectedRoute>
+            <Examdone />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/exam/:examId/done"
+        element={
+          <ProtectedRoute>
+            <Examdone />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Admin Protected Routes */}
+      <Route
+        path="/admin"
+        element={
+          <ProtectedRoute requiredRole="admin">
+            <AdminDashboard />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin/monitor/:examId"
+        element={
+          <ProtectedRoute requiredRole="admin">
+            <AdminDashboard />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/monitor/:examId"
+        element={
+          <ProtectedRoute requiredRole="admin">
+            <LiveMonitoring />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/create-exam"
+        element={
+          <ProtectedRoute requiredRole="admin">
+            <CreateExam />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Student Protected Routes */}
+      <Route
+        path="/examcode"
+        element={
+          <ProtectedRoute requiredRole="student">
+            <Examcode />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/diagnostics/:examCode"
+        element={
+          <ProtectedRoute requiredRole="student">
+            <Diagnostics />
+          </ProtectedRoute>
+        }
+      />
+      <Route path="/exam" element={<Navigate to="/examcode" replace />} />
+
+      {/* Root & Catch-all Fallbacks */}
+      <Route
+        path="/"
+        element={
+          user ? (
+            <Navigate to={role === "admin" ? "/admin" : "/examcode"} replace />
+          ) : (
+            <Navigate to="/login" replace />
+          )
+        }
+      />
+      <Route
+        path="*"
+        element={
+          user ? (
+            <Navigate to={role === "admin" ? "/admin" : "/examcode"} replace />
+          ) : (
+            <Navigate to="/login" replace />
+          )
+        }
+      />
     </Routes>
-  )
+  );
 }
 
-export default App
+export default App;
