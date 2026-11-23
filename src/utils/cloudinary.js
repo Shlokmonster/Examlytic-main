@@ -57,7 +57,7 @@ export const uploadToCloudinary = (file, userId, folder = 'examlytic/recordings'
             console.error('Cloudinary upload failed:', responseData);
             reject(new Error(responseData.error?.message || `Upload failed with status ${xhr.status}`));
           }
-        } catch (err) {
+        } catch {
           reject(new Error('Failed to parse Cloudinary response'));
         }
       };

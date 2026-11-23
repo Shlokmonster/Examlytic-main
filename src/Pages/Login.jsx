@@ -15,7 +15,7 @@ function Login() {
                 const { id, email } = session.user;
 
                 // STEP 1: Check if user exists in 'users' table
-                const { data: userExists, error: userCheckError } = await supabase
+                const { data: userExists, error: _userCheckError } = await supabase
                     .from("users")
                     .select("*")
                     .eq("id", id)

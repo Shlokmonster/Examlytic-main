@@ -1458,9 +1458,10 @@ export default function ExamAttempt() {
       if (uploadResult?.url) {
         console.log('Recording uploaded successfully:', uploadResult.url);
         
-        // If we have a valid examAttemptId, update the record
-        if (examAttemptId) {
-          console.log('Updating exam attempt with recording URL, attempt ID:', examAttemptId);
+        // If we have a valid attempt reference, update the record
+        const targetAttemptId = currentAttemptIdRef.current || examAttemptId;
+        if (targetAttemptId) {
+          console.log('Updating exam attempt with recording URL, attempt ID:', targetAttemptId);
           const { error: updateError } = await supabase
             .from('exam_attempts')
             .update({ 
@@ -1468,7 +1469,7 @@ export default function ExamAttempt() {
               cloudinary_public_id: uploadResult.public_id,
               recording_duration: uploadResult.duration
             })
-            .eq('id', examAttemptId);
+            .eq('id', targetAttemptId);
             
           if (updateError) {
             console.error('Error updating attempt with recording URL:', updateError);
@@ -1539,7 +1540,7 @@ export default function ExamAttempt() {
       // 1. Prepare submission payload
       const finalScore = calculateScore(answers, questions);
       const nowIso = new Date().toISOString();
-      const isExpired = timeLeft <= 0;
+      const isExpired = (expiresAtRef.current && Date.now() > expiresAtRef.current) || timeLeft <= 0;
       const updateFields = {
         answers: answers,
         submitted_at: nowIso,
@@ -1631,17 +1632,17 @@ export default function ExamAttempt() {
         totalQuestions: questions.length
       });
 
-      // 5. Clean up duplicate unsubmitted attempts
+      // 5. Mark older unsubmitted duplicate attempts as abandoned (never delete records)
       if (currentAttemptId) {
         supabase
           .from('exam_attempts')
-          .delete()
+          .update({ status: 'abandoned' })
           .eq('exam_id', examId)
           .eq('student_id', user.id)
           .is('submitted_at', null)
           .neq('id', currentAttemptId)
           .then(({ error }) => {
-            if (error) console.warn('Clean up duplicates notice:', error.message);
+            if (error) console.warn('Mark older attempts notice:', error.message);
           });
       }
 

@@ -56,7 +56,7 @@ function Examcode() {
                 console.log('Exam is active, redirecting to diagnostics page');
                 navigate(`/diagnostics/${trimmedCode}`);
             }
-        } catch (err) {
+        } catch {
             setIsLoading(false);
             setError("Something went wrong. Please try again later.");
         }

@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useLocation, useParams } from "react-router-dom";
 import { jsPDF } from "jspdf";
-import html2canvas from "html2canvas";
 import Navbar from "../Components/common/Navbar";
 import supabase from "../SupabaseClient";
 import { FaDownload, FaUser, FaBook, FaCheck, FaThLarge, FaArrowLeft } from 'react-icons/fa';
@@ -20,9 +19,9 @@ function ExamDone() {
   const [examData, setExamData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [score, setScore] = useState(0);
-  const [totalQuestions, setTotalQuestions] = useState(0);
-  const [percentage, setPercentage] = useState(0);
+  const [_score, setScore] = useState(0);
+  const [_totalQuestions, setTotalQuestions] = useState(0);
+  const [_percentage, setPercentage] = useState(0);
   
   const [userProfile, setUserProfile] = useState(null);
   const [examInfo, setExamInfo] = useState(null);
@@ -78,7 +77,7 @@ function ExamDone() {
         }
 
         // 2. Fetch student info from the 'users' table
-        const { data: userData, error: userDbError } = await supabase
+        const { data: userData, error: _userDbError } = await supabase
           .from('users')
           .select('*')
           .eq('id', user.id)
@@ -308,7 +307,6 @@ function ExamDone() {
       const contentWidth = pageWidth - (2 * margin); // 180mm
       
       let y = 20; // Current Y position in mm
-      let currentPage = 1;
 
       const drawHeaderBranding = () => {
         // Draw top line header
@@ -343,7 +341,6 @@ function ExamDone() {
       const checkPageBreak = (neededHeight) => {
         if (y + neededHeight > 270) {
           pdf.addPage();
-          currentPage++;
           y = 20;
           drawHeaderBranding();
         }

@@ -123,7 +123,7 @@ function Diagnostics() {
                     microphone: { checking: false, passed: false, message: 'Microphone permission denied.' }
                 }));
                 enumerateCameras();
-            } catch (videoErr) {
+            } catch {
                 setStatus(prev => ({
                     ...prev,
                     camera: { checking: false, passed: false, message: 'Camera permission denied.' },
