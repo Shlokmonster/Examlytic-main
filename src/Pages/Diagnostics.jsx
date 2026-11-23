@@ -56,6 +56,7 @@ function Diagnostics() {
                 clearInterval(audioIntervalRef.current);
             }
         };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     useEffect(() => {

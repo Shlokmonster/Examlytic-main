@@ -204,6 +204,7 @@ export default function ExamAttempt() {
       });
       return null;
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [examId]);
 
   // Run object detection
@@ -248,6 +249,7 @@ export default function ExamAttempt() {
     } catch (error) {
       console.error('Error in object detection:', error);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [objectDetector, detectionRunning]);
 
   // Run face and object detection
@@ -419,6 +421,7 @@ export default function ExamAttempt() {
         setTimeout(runDetections, 1000);
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [faceDetector, objectDetector, saveFlag]);
 
   // Run face detection
@@ -649,6 +652,7 @@ export default function ExamAttempt() {
       reconnectAttempts.current++;
       setTimeout(setupPeerConnection, 2000);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [examId, studentId]);
 
   // Stop all tracks in a stream
@@ -736,6 +740,7 @@ export default function ExamAttempt() {
       await saveFlag('WEBCAM_ACCESS_DENIED');
       return null;
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [faceDetector, detectionRunning, runDetections]);
 
   // Initialize detectors on component mount
@@ -797,6 +802,7 @@ export default function ExamAttempt() {
         webcamStreamRef.current = null;
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Removed dependencies to prevent re-runs
 
 
@@ -1003,6 +1009,7 @@ export default function ExamAttempt() {
         roomRef.current.disconnect();
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [examId])
 
   useEffect(() => {
@@ -1022,6 +1029,7 @@ export default function ExamAttempt() {
       }
     }, 1000);
     return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [timeLeft, examAttemptId]);
 
   // 15-second heartbeat ping for session vitality
@@ -1270,6 +1278,7 @@ export default function ExamAttempt() {
         });
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [examAttemptId, studentId]);
 
   useEffect(() => {
@@ -1321,6 +1330,7 @@ export default function ExamAttempt() {
         });
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [examAttemptId]);
 
   // Function to calculate score

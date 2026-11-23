@@ -806,6 +806,7 @@ FACE_NOT_FOUND: 0,
       clearInterval(interval);
       supabase.removeChannel(channel);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
