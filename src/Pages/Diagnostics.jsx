@@ -30,24 +30,36 @@ function Diagnostics() {
     
     // Devices list
     const [cameras, setCameras] = useState([]);
-    const [cameraLabel, setCameraLabel] = useState('Logitech BRIO 4K (Current)');
+    const [cameraLabel, setCameraLabel] = useState('Detecting camera...');
     const [selectedCameraId, setSelectedCameraId] = useState('');
     const [showCameraSelector, setShowCameraSelector] = useState(false);
+    const [isScanningCameras, setIsScanningCameras] = useState(false);
+    const [cameraScanNote, setCameraScanNote] = useState('');
     
     // Status of each diagnostic check
     const [status, setStatus] = useState({
         camera: { checking: true, passed: false, message: 'Checking camera...' },
         microphone: { checking: true, passed: false, message: 'Checking microphone...' },
         screenShare: { checking: false, passed: false, message: 'Select screen share to verify compatibility.' },
-        browser: { checking: true, passed: false, message: 'Checking browser compatibility...' },
+        browser: { checking: true, passed: false, message: 'Checking browser lock compatibility...' },
         internet: { checking: true, passed: false, message: 'Checking network speed...' }
     });
 
     useEffect(() => {
         // Initial setup
         runInitialChecks();
+
+        const handleDeviceChange = () => {
+            enumerateCameras();
+        };
+        if (navigator.mediaDevices?.addEventListener) {
+            navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
+        }
         
         return () => {
+            if (navigator.mediaDevices?.removeEventListener) {
+                navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange);
+            }
             // Clean up streams on unmount
             if (videoStream) {
                 videoStream.getTracks().forEach(track => track.stop());
@@ -180,13 +192,22 @@ function Diagnostics() {
             const devices = await navigator.mediaDevices.enumerateDevices();
             const videoDevices = devices.filter(d => d.kind === 'videoinput');
             setCameras(videoDevices);
+            if (videoDevices.length === 0) {
+                setCameraScanNote('No cameras detected. Please connect a webcam and try again.');
+            } else if (videoDevices.length === 1) {
+                setCameraScanNote('1 camera detected on this device.');
+            } else {
+                setCameraScanNote(`${videoDevices.length} cameras available. Select one below.`);
+            }
+            return videoDevices;
         } catch (e) {
             console.error("Error listing cameras:", e);
+            setCameraScanNote('Unable to scan camera devices.');
+            return [];
         }
     };
 
-    const handleCameraChange = async (e) => {
-        const deviceId = e.target.value;
+    const switchCameraById = async (deviceId) => {
         if (!deviceId) return;
         
         if (videoStream) {
@@ -203,6 +224,7 @@ function Diagnostics() {
             });
             setVideoStream(newStream);
             setSelectedCameraId(deviceId);
+            localStorage.setItem('examlytic_preferred_camera_id', deviceId);
             
             const videoTrack = newStream.getVideoTracks()[0];
             if (videoTrack) {
@@ -215,10 +237,25 @@ function Diagnostics() {
             }));
             
             startAudioMonitoring(newStream);
+            setShowCameraSelector(false);
         } catch (err) {
             console.error("Error switching camera:", err);
-            // Revert to default check
+            setCameraScanNote('Failed to switch to selected camera. Reverting...');
             requestCameraAndMicPermissions();
+        }
+    };
+
+    const handleCameraChange = async (e) => {
+        await switchCameraById(e.target.value);
+    };
+
+    const handleChangeCameraClick = async () => {
+        const nextOpen = !showCameraSelector;
+        setShowCameraSelector(nextOpen);
+        if (nextOpen) {
+            setIsScanningCameras(true);
+            await enumerateCameras();
+            setIsScanningCameras(false);
         }
     };
 
@@ -382,9 +419,9 @@ function Diagnostics() {
                                             onChange={handleCameraChange}
                                             className="camera-select"
                                         >
-                                            {cameras.map(camera => (
+                                            {cameras.map((camera, idx) => (
                                                 <option key={camera.deviceId} value={camera.deviceId}>
-                                                    {camera.label || `Camera ${camera.deviceId.slice(0, 5)}`}
+                                                    {camera.label || `Camera ${idx + 1}`}
                                                 </option>
                                             ))}
                                         </select>
@@ -393,12 +430,85 @@ function Diagnostics() {
                                     )}
                                 </div>
                                 <button 
+                                    type="button"
                                     className="btn-change-camera" 
-                                    onClick={() => setShowCameraSelector(!showCameraSelector)}
+                                    onClick={handleChangeCameraClick}
                                 >
-                                    Change Camera
+                                    {showCameraSelector ? 'Close' : 'Change Camera'}
                                 </button>
                             </div>
+
+                            {showCameraSelector && (
+                                <div style={{
+                                    padding: '12px 16px',
+                                    backgroundColor: '#F8FAFC',
+                                    borderTop: '1px solid #E5E7EB',
+                                    fontSize: '0.85rem'
+                                }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                                        <strong style={{ color: '#111827' }}>
+                                            {isScanningCameras ? 'Searching for available cameras...' : (cameraScanNote || 'Available Cameras')}
+                                        </strong>
+                                        <button
+                                            type="button"
+                                            onClick={async () => {
+                                                setIsScanningCameras(true);
+                                                await enumerateCameras();
+                                                setIsScanningCameras(false);
+                                            }}
+                                            style={{
+                                                background: 'none',
+                                                border: '1px solid #D1D5DB',
+                                                borderRadius: '6px',
+                                                padding: '4px 10px',
+                                                fontSize: '0.78rem',
+                                                fontWeight: 600,
+                                                cursor: 'pointer',
+                                                color: '#374151',
+                                                backgroundColor: '#FFFFFF'
+                                            }}
+                                        >
+                                            {isScanningCameras ? 'Scanning...' : 'Rescan Cameras'}
+                                        </button>
+                                    </div>
+                                    {cameras.length > 0 ? (
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                            {cameras.map((camera, idx) => {
+                                                const isActive = camera.deviceId === selectedCameraId;
+                                                return (
+                                                    <button
+                                                        type="button"
+                                                        key={camera.deviceId || idx}
+                                                        onClick={() => switchCameraById(camera.deviceId)}
+                                                        style={{
+                                                            display: 'flex',
+                                                            justifyContent: 'space-between',
+                                                            alignItems: 'center',
+                                                            padding: '8px 12px',
+                                                            borderRadius: '8px',
+                                                            border: isActive ? '1.5px solid #4F46E5' : '1px solid #E2E8F0',
+                                                            backgroundColor: isActive ? '#EEF2FF' : '#FFFFFF',
+                                                            color: isActive ? '#3730A3' : '#1F2937',
+                                                            fontWeight: isActive ? 700 : 500,
+                                                            cursor: 'pointer',
+                                                            textAlign: 'left'
+                                                        }}
+                                                    >
+                                                        <span>{camera.label || `Camera ${idx + 1}`}</span>
+                                                        <span style={{ fontSize: '0.75rem', fontWeight: 700 }}>
+                                                            {isActive ? 'ACTIVE' : 'Select'}
+                                                        </span>
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    ) : (
+                                        <p style={{ margin: 0, color: '#6B7280' }}>
+                                            No cameras found. Connect a camera and click Rescan Cameras.
+                                        </p>
+                                    )}
+                                </div>
+                            )}
                         </div>
 
                         {/* Privacy Guarantee Banner */}
@@ -499,18 +609,30 @@ function Diagnostics() {
                                 )}
 
                                 {/* Browser Lock Item */}
-                                <div className="checklist-item status-pending browser-lock-item">
+                                <div className={`checklist-item ${status.browser.passed ? 'status-passed' : 'status-pending'} browser-lock-item`}>
                                     <div className="item-icon-wrapper">
-                                        <div className="icon-circle-gray">
-                                            <FaChrome className="lock-icon-pending" />
-                                        </div>
+                                        {status.browser.checking ? (
+                                            <FaSpinner className="check-loading-icon spin" />
+                                        ) : status.browser.passed ? (
+                                            <FaCheckCircle className="check-success-icon" />
+                                        ) : (
+                                            <div className="icon-circle-gray">
+                                                <FaChrome className="lock-icon-pending" />
+                                            </div>
+                                        )}
                                     </div>
                                     <div className="item-details">
                                         <div className="item-header">
                                             <span className="item-title">Browser Lock</span>
-                                            <span className="item-badge badge-pending">PENDING</span>
+                                            <span className={`item-badge ${status.browser.passed ? 'badge-passed' : 'badge-pending'}`}>
+                                                {status.browser.checking ? 'CHECKING' : (status.browser.passed ? 'READY' : 'UNSUPPORTED')}
+                                            </span>
                                         </div>
-                                        <p className="item-description">Will activate when you enter session.</p>
+                                        <p className="item-description">
+                                            {status.browser.passed
+                                                ? `${status.browser.message} — Fullscreen & Tab-Lock armed for exam session.`
+                                                : status.browser.message}
+                                        </p>
                                     </div>
                                 </div>
                             </div>

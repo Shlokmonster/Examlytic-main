@@ -46,7 +46,7 @@ export const generateExamQuestions = async (topic, numQuestions = 5) => {
 
     console.log('Sending request to Groq API...');
     const requestBody = {
-      model: "llama-3.3-70b-versatile",
+      model: "openai/gpt-oss-20b",
       messages: [
         {
           role: "system",

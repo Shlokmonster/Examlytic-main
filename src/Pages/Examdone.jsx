@@ -7,39 +7,174 @@ import { FaDownload, FaUser, FaBook, FaCheck, FaThLarge, FaArrowLeft } from 'rea
 import "../ExamDone.css";
 import Loader from "../Components/common/Loader";
 
+// Helper to normalize questions from any DB/state shape
+const normalizeQuestions = (rawQuestions = []) => {
+  if (!Array.isArray(rawQuestions)) return [];
+  return rawQuestions.map((q, i) => {
+    try {
+      const question = typeof q === 'string' ? JSON.parse(q) : (q || {});
+      const fallbackId = `q-${i}`;
+      const questionId = question.id || fallbackId;
+
+      let options = [];
+      const optionLetters = ['A', 'B', 'C', 'D', 'E', 'F'];
+
+      if (Array.isArray(question.options) && question.options.length > 0) {
+        options = question.options.map((opt, oidx) => {
+          const letter = optionLetters[oidx] || String(oidx + 1);
+          if (typeof opt === 'object' && opt !== null) {
+            return {
+              letter: opt.letter || opt.value || letter,
+              text: String(opt.text ?? opt.label ?? opt.value ?? ''),
+              value: opt.value || opt.letter || letter,
+            };
+          }
+          return {
+            letter,
+            text: String(opt ?? ''),
+            value: letter,
+          };
+        });
+      } else {
+        optionLetters.slice(0, 4).forEach((letter) => {
+          const optionKey = `option${letter}`;
+          if (question[optionKey] !== undefined && question[optionKey] !== null && question[optionKey] !== '') {
+            options.push({
+              letter,
+              text: String(question[optionKey]),
+              value: letter,
+            });
+          }
+        });
+      }
+
+      const rawCorrect =
+        question.correct_answer ??
+        question.correctAnswer ??
+        question.answer ??
+        question.expected_answer ??
+        '';
+
+      return {
+        ...question,
+        id: questionId,
+        fallbackId,
+        text: String(question.text || question.question || question.question_text || `Question ${i + 1}`),
+        options,
+        correctAnswer: rawCorrect !== null && rawCorrect !== undefined ? String(rawCorrect).trim() : '',
+      };
+    } catch (e) {
+      console.error(`Error parsing question ${i}:`, e);
+      return {
+        id: `q-${i}`,
+        fallbackId: `q-${i}`,
+        text: `Question ${i + 1}`,
+        options: [],
+        correctAnswer: '',
+      };
+    }
+  });
+};
+
+// Helper to normalize answers into a lookup map AND array
+const normalizeAnswersMap = (rawAnswers) => {
+  const map = {};
+  if (!rawAnswers) return map;
+
+  let parsed = rawAnswers;
+  if (typeof rawAnswers === 'string') {
+    try {
+      parsed = JSON.parse(rawAnswers);
+    } catch {
+      return map;
+    }
+  }
+
+  if (Array.isArray(parsed)) {
+    parsed.forEach((item, idx) => {
+      if (item && typeof item === 'object' && item.questionId !== undefined) {
+        map[String(item.questionId)] = item.answer;
+      } else {
+        map[`q-${idx}`] = item;
+        map[String(idx)] = item;
+      }
+    });
+  } else if (typeof parsed === 'object' && parsed !== null) {
+    Object.entries(parsed).forEach(([k, v]) => {
+      map[String(k)] = v;
+    });
+  }
+
+  return map;
+};
+
+// Normalize answer token (handles 'optionA' -> 'A', '0' -> 'A', 'A' -> 'A', or text)
+const normalizeAnswerToken = (val, options = []) => {
+  if (val === undefined || val === null) return '';
+  let str = String(val).trim();
+  if (!str) return '';
+  const optionKeyMatch = str.match(/^option([A-F])$/i);
+  if (optionKeyMatch) return optionKeyMatch[1].toUpperCase();
+  if (/^[0-5]$/.test(str) && options.length > 0) {
+    const idx = Number(str);
+    if (options[idx]) return String(options[idx].letter || String.fromCharCode(65 + idx)).toUpperCase();
+  }
+  return str;
+};
+
+// Evaluate a single question's user answer and correctness
+const evaluateQuestionResult = (question, index, answersMap) => {
+  const rawUserAns =
+    answersMap[String(question.id)] ??
+    answersMap[question.fallbackId || `q-${index}`] ??
+    answersMap[`q-${index}`] ??
+    answersMap[String(index)];
+
+  const userAnswer = normalizeAnswerToken(rawUserAns, question.options);
+  const correctAnswer = normalizeAnswerToken(question.correctAnswer, question.options);
+
+  let isCorrect = false;
+  if (userAnswer && correctAnswer) {
+    const uNorm = userAnswer.toUpperCase();
+    const cNorm = correctAnswer.toUpperCase();
+    if (uNorm === cNorm) {
+      isCorrect = true;
+    } else if (Array.isArray(question.options) && question.options.length > 0) {
+      const userOpt = question.options.find(
+        (o) => o.letter.toUpperCase() === uNorm || o.text.trim().toUpperCase() === uNorm
+      );
+      const correctOpt = question.options.find(
+        (o) => o.letter.toUpperCase() === cNorm || o.text.trim().toUpperCase() === cNorm
+      );
+      if (userOpt && correctOpt && userOpt.letter.toUpperCase() === correctOpt.letter.toUpperCase()) {
+        isCorrect = true;
+      }
+    }
+  }
+
+  return { userAnswer, correctAnswer, isCorrect };
+};
+
 function ExamDone() {
   const location = useLocation();
   const navigate = useNavigate();
   const { examId: routeExamId } = useParams();
   
   // Resolve exam ID from route params or location state
-  const { examId: stateExamId } = location.state || {};
+  const { examId: stateExamId, attemptId: stateAttemptId } = location.state || {};
   const examId = routeExamId || stateExamId;
 
   const [examData, setExamData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [_score, setScore] = useState(0);
+  const [pdfError, setPdfError] = useState(null);
+  const [score, setScore] = useState(0);
   const [_totalQuestions, setTotalQuestions] = useState(0);
   const [_percentage, setPercentage] = useState(0);
   
   const [userProfile, setUserProfile] = useState(null);
   const [examInfo, setExamInfo] = useState(null);
   const [submittedAt, setSubmittedAt] = useState(null);
-
-  // Helper to retrieve answer regardless of storage shape
-  const getAnswerFromData = (answersData, question, index) => {
-    if (!answersData) return undefined;
-    if (Array.isArray(answersData)) {
-      if (typeof answersData[index] === 'string' || typeof answersData[index] === 'number') return answersData[index];
-      const obj = answersData.find(a => a.questionId === question.id);
-      return obj ? obj.answer : undefined;
-    }
-    if (typeof answersData === 'object') {
-      return answersData[question.id];
-    }
-    return undefined;
-  };
 
   // Helper to format submission timestamp in UTC matching the mockup
   const formatSubmissionDate = (date) => {
@@ -109,114 +244,88 @@ function ExamDone() {
         setExamInfo(dbExamData);
 
         // Process questions to handle different options format
-        const questions = [];
-        if (Array.isArray(dbExamData.questions)) {
-          dbExamData.questions.forEach((q, i) => {
-            try {
-              const question = typeof q === 'string' ? JSON.parse(q) : q;
-              const questionId = `q-${i}`;
-              
-              const options = [];
-              const optionLetters = ['A', 'B', 'C', 'D'];
-              optionLetters.forEach(letter => {
-                const optionKey = `option${letter}`;
-                if (question[optionKey]) {
-                  options.push({
-                    letter,
-                    text: question[optionKey],
-                    value: letter
-                  });
-                }
-              });
+        const questions = normalizeQuestions(dbExamData.questions);
 
-              questions.push({
-                id: questionId,
-                text: question.text || question.question || `Question ${i + 1}`,
-                options,
-                correctAnswer: question.correct_answer || question.correctAnswer,
-                ...question
-              });
-            } catch (e) {
-              console.error(`Error parsing question ${i}:`, e);
-              questions.push({
-                id: `q-${i}`,
-                text: `Question ${i + 1}`,
-                options: []
-              });
-            }
-          });
+        // 4. Fetch SUBMITTED attempt data from 'exam_attempts'
+        // If attemptId was passed from ExamAttempt, fetch that exact attempt first
+        let attemptRow = null;
+        let attErr = null;
+
+        if (stateAttemptId) {
+          const exactRes = await supabase
+            .from('exam_attempts')
+            .select('*')
+            .eq('id', stateAttemptId)
+            .eq('student_id', user.id)
+            .maybeSingle();
+          attemptRow = exactRes.data;
+          attErr = exactRes.error;
         }
 
-        // 4. Fetch attempt data from 'exam_attempts'
-        const { data: attemptRow, error: attErr } = await supabase
-          .from('exam_attempts')
-          .select('*')
-          .eq('exam_id', examId)
-          .eq('student_id', user.id)
-          .order('submitted_at', { ascending: false })
-          .limit(1)
-          .maybeSingle();
+        if (!attemptRow && !attErr) {
+          const latestRes = await supabase
+            .from('exam_attempts')
+            .select('*')
+            .eq('exam_id', examId)
+            .eq('student_id', user.id)
+            .not('submitted_at', 'is', null)
+            .order('submitted_at', { ascending: false, nullsFirst: false })
+            .limit(1)
+            .maybeSingle();
+          attemptRow = latestRes.data;
+          attErr = latestRes.error;
+        }
+
+        if (!attemptRow && !attErr) {
+          const fallbackRes = await supabase
+            .from('exam_attempts')
+            .select('*')
+            .eq('exam_id', examId)
+            .eq('student_id', user.id)
+            .in('status', ['completed', 'submitted', 'expired'])
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          attemptRow = fallbackRes.data;
+          attErr = fallbackRes.error;
+        }
         
         if (attErr) {
           console.error('Error fetching attempt:', attErr);
           throw attErr;
         }
 
-        let answers = [];
-        let submissionTime = new Date();
+        // Prefer the exact answers just submitted in location.state if present & non-empty
+        const stateAnswersMap = normalizeAnswersMap(location.state?.answers);
+        const dbAnswersMap = normalizeAnswersMap(attemptRow?.answers);
+        const answersMap = Object.keys(stateAnswersMap).length > 0 ? stateAnswersMap : dbAnswersMap;
 
-        if (attemptRow) {
-          if (attemptRow.submitted_at) {
-            submissionTime = new Date(attemptRow.submitted_at);
-          }
-          setSubmittedAt(submissionTime);
+        const submissionTime = attemptRow?.submitted_at
+          ? new Date(attemptRow.submitted_at)
+          : (attemptRow?.completed_at ? new Date(attemptRow.completed_at) : new Date());
+        setSubmittedAt(submissionTime);
 
-          if (attemptRow.answers) {
-            try {
-              const rawAnswers = typeof attemptRow.answers === 'string' 
-                ? JSON.parse(attemptRow.answers) 
-                : attemptRow.answers;
+        // Cross-check submitted answers against authoritative questions
+        let correctAnswersCnt = 0;
+        let hasAnyCorrectKey = false;
 
-              if (Array.isArray(rawAnswers)) {
-                answers = rawAnswers;
-              } else if (typeof rawAnswers === 'object') {
-                answers = Object.entries(rawAnswers).map(([questionId, answer]) => ({
-                  questionId,
-                  answer
-                }));
-              }
-            } catch (e) {
-              console.error('Error parsing answers:', e);
-            }
-          }
-        } else {
-          // Fallback to location state answers if attempt not written to DB yet
-          const { answers: stateAnswers } = location.state || {};
-          if (stateAnswers) {
-            if (Array.isArray(stateAnswers)) {
-              answers = stateAnswers;
-            } else if (typeof stateAnswers === 'object') {
-              answers = Object.entries(stateAnswers).map(([questionId, answer]) => ({
-                questionId,
-                answer
-              }));
-            }
-          }
-          setSubmittedAt(new Date());
+        questions.forEach((q, idx) => {
+          const { correctAnswer, isCorrect } = evaluateQuestionResult(q, idx, answersMap);
+          if (correctAnswer) hasAnyCorrectKey = true;
+          if (isCorrect) correctAnswersCnt++;
+        });
+
+        let examScorePercent = questions.length > 0 ? (correctAnswersCnt / questions.length) * 100 : 0;
+        // Fallback to server-authoritative score if correct keys were absent on client
+        if (!hasAnyCorrectKey && typeof attemptRow?.score === 'number' && questions.length > 0) {
+          examScorePercent = attemptRow.score;
+          correctAnswersCnt = Math.round((attemptRow.score / 100) * questions.length);
         }
 
-        // Calculate score
-        let correctAnswersCnt = 0;
-        questions.forEach((q, idx) => {
-          const ans = getAnswerFromData(answers, q, idx);
-          if (q.correctAnswer === ans) correctAnswersCnt++;
-        });
-        const examScore = questions.length > 0 ? (correctAnswersCnt / questions.length) * 100 : 0;
-
-        setExamData({ questions, answers });
+        setExamData({ questions, answersMap });
         setScore(correctAnswersCnt);
         setTotalQuestions(questions.length);
-        setPercentage(examScore);
+        setPercentage(examScorePercent);
         setLoading(false);
       } catch (err) {
         console.error('Error processing exam results from DB:', err);
@@ -225,10 +334,19 @@ function ExamDone() {
         try {
           const { answers: stateAnswers, questions: stateQuestions, score: stateScore, totalQuestions: stateTotal } = location.state || {};
           if (stateAnswers && stateQuestions) {
-            setExamData({ questions: stateQuestions, answers: stateAnswers });
-            setScore(stateScore || 0);
-            setTotalQuestions(stateTotal || stateQuestions.length);
-            setPercentage(stateQuestions.length > 0 ? ((stateScore || 0) / stateQuestions.length) * 100 : 0);
+            const normQs = normalizeQuestions(stateQuestions);
+            const answersMap = normalizeAnswersMap(stateAnswers);
+            let correctCnt = 0;
+            normQs.forEach((q, idx) => {
+              const { isCorrect } = evaluateQuestionResult(q, idx, answersMap);
+              if (isCorrect) correctCnt++;
+            });
+            const totalCnt = stateTotal || normQs.length;
+            const finalCorrect = correctCnt > 0 ? correctCnt : (typeof stateScore === 'number' && totalCnt > 0 ? Math.round((stateScore / 100) * totalCnt) : 0);
+            setExamData({ questions: normQs, answersMap });
+            setScore(finalCorrect);
+            setTotalQuestions(totalCnt);
+            setPercentage(totalCnt > 0 ? (finalCorrect / totalCnt) * 100 : 0);
             setSubmittedAt(new Date());
             setLoading(false);
             return;
@@ -243,60 +361,41 @@ function ExamDone() {
     };
 
     fetchExamAndUserData();
-  }, [examId, location.state]);
+  }, [examId, stateAttemptId, location.state]);
 
   const generatePDF = async () => {
-    if (!examData || !examData.questions) {
-      setError('There is no exam data to generate the PDF.');
+    if (!examData || !examData.questions || examData.questions.length === 0) {
+      setPdfError('There is no exam data to generate the PDF.');
       return;
     }
+    setPdfError(null);
     try {
-      let answersArray = [];
+      let answersMap = examData.answersMap || {};
       const { data: { user } } = await supabase.auth.getUser();
       
-      if (examData.answers) {
-        if (Array.isArray(examData.answers)) {
-          answersArray = examData.answers;
-        } else if (typeof examData.answers === 'object') {
-          answersArray = Object.entries(examData.answers).map(([questionId, answer]) => ({
-            questionId,
-            answer
-          }));
-        }
-      }
-      
-      if (answersArray.length === 0 && user && examId) {
-        const { data, error } = await supabase
+      if (Object.keys(answersMap).length === 0 && user && examId) {
+        const { data, error: fetchErr } = await supabase
           .from('exam_attempts')
           .select('answers')
           .eq('exam_id', examId)
           .eq('student_id', user.id)
-          .order('submitted_at', { ascending: false })
+          .not('submitted_at', 'is', null)
+          .order('submitted_at', { ascending: false, nullsFirst: false })
           .limit(1)
           .maybeSingle();
           
-        if (!error && data?.answers) {
-          const rawAnswers = typeof data.answers === 'string' ? JSON.parse(data.answers) : data.answers;
-          if (Array.isArray(rawAnswers)) {
-            answersArray = rawAnswers;
-          } else if (typeof rawAnswers === 'object') {
-            answersArray = Object.entries(rawAnswers).map(([questionId, answer]) => ({
-              questionId,
-              answer
-            }));
-          }
+        if (!fetchErr && data?.answers) {
+          answersMap = normalizeAnswersMap(data.answers);
         }
       }
 
       const totalQs = examData.questions.length;
       const correctCount = examData.questions.reduce((acc, q, idx) => {
-        const answerObj = answersArray.find(a => 
-          a.questionId === q.id || a.questionId === `q-${idx}`
-        );
-        const userAnswer = answerObj ? answerObj.answer : undefined;
-        return userAnswer === q.correctAnswer ? acc + 1 : acc;
+        const { isCorrect } = evaluateQuestionResult(q, idx, answersMap);
+        return isCorrect ? acc + 1 : acc;
       }, 0);
-      const percent = totalQs > 0 ? (correctCount / totalQs) * 100 : 0;
+      const effectiveCorrect = correctCount > 0 ? correctCount : score;
+      const percent = totalQs > 0 ? (effectiveCorrect / totalQs) * 100 : 0;
 
       // Initialize jsPDF (A4 page: 210mm x 297mm)
       const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
@@ -315,7 +414,7 @@ function ExamDone() {
         pdf.setTextColor(5, 150, 105); // Examlytic Green (#059669)
         pdf.text("Examlytic", margin, y);
         
-        pdf.setFont("helvetica", "light");
+        pdf.setFont("helvetica", "normal");
         pdf.setFontSize(18);
         pdf.setTextColor(209, 213, 219); // Light Divider
         pdf.text("|", margin + 31, y - 0.5);
@@ -414,7 +513,7 @@ function ExamDone() {
       pdf.setTextColor(4, 120, 87); // Dark Green #047857
       pdf.text("Performance Result", margin + 6, y + 9);
 
-      const scoreText = `${correctCount} / ${totalQs} (${Math.round(percent)}%)`;
+      const scoreText = `${effectiveCorrect} / ${totalQs} (${Math.round(percent)}%)`;
       pdf.setFont("helvetica", "bold");
       pdf.setFontSize(12);
       pdf.text(scoreText, pageWidth - margin - 6, y + 9, { align: "right" });
@@ -426,7 +525,7 @@ function ExamDone() {
       pdf.setFont("helvetica", "bold");
       pdf.setFontSize(13);
       pdf.setTextColor(17, 24, 39);
-      pdf.text("Response Summary", margin, y);
+      pdf.text("Response Summary & Answer Key", margin, y);
       
       pdf.setDrawColor(229, 231, 235);
       pdf.line(margin, y + 3, pageWidth - margin, y + 3);
@@ -434,11 +533,9 @@ function ExamDone() {
 
       // Questions List
       examData.questions.forEach((question, index) => {
-        const answerObj = answersArray.find(a => a.questionId === question.id || a.questionId === `q-${index}`);
-        const ansVal = answerObj ? answerObj.answer : undefined;
-        const isCorrect = (question.correctAnswer === ansVal);
+        const { userAnswer: ansVal, correctAnswer: correctVal, isCorrect } = evaluateQuestionResult(question, index, answersMap);
 
-        const qTitle = question.text || question.question || question.question_text || `Question ${index + 1}`;
+        const qTitle = String(question.text || question.question || question.question_text || `Question ${index + 1}`);
         const cleanQTitle = `Question ${index + 1}: ${qTitle}`;
         const questionLines = pdf.splitTextToSize(cleanQTitle, contentWidth - 12);
         const questionHeight = questionLines.length * 4.5;
@@ -448,9 +545,17 @@ function ExamDone() {
         const formattedOpts = [];
 
         if (question.options && question.options.length > 0) {
-          question.options.forEach(opt => {
-            const isUserChoice = (ansVal === opt.letter || ansVal === opt.value || ansVal === opt.text);
-            const isCorrectChoice = (question.correctAnswer === opt.letter || question.correctAnswer === opt.value || question.correctAnswer === opt.text);
+          question.options.forEach((opt, oidx) => {
+            const optLetter = String(opt.letter || opt.value || String.fromCharCode(65 + oidx));
+            const optText = String(opt.text ?? opt ?? '');
+            const uNorm = ansVal.toUpperCase();
+            const cNorm = correctVal.toUpperCase();
+            const isUserChoice = Boolean(ansVal) && (
+              uNorm === optLetter.toUpperCase() || uNorm === optText.trim().toUpperCase()
+            );
+            const isCorrectChoice = Boolean(correctVal) && (
+              cNorm === optLetter.toUpperCase() || cNorm === optText.trim().toUpperCase()
+            );
             
             let statusText = '';
             if (isUserChoice) {
@@ -459,13 +564,13 @@ function ExamDone() {
               statusText = ' [Correct Answer]';
             }
 
-            const optLine = `Option ${opt.letter || opt.value}: ${opt.text}${statusText}`;
+            const optLine = `Option ${optLetter}: ${optText}${statusText}`;
             const optLines = pdf.splitTextToSize(optLine, contentWidth - 16);
             formattedOpts.push({ optLines, isUserChoice, isCorrectChoice, isCorrect });
             optionsHeight += optLines.length * 4.5 + 2; // line height + padding
           });
         } else {
-          const respText = `Your Response: ${ansVal || 'Not answered'} ${isCorrect ? '(Correct)' : `(Incorrect, Correct: ${question.correctAnswer || 'N/A'})`}`;
+          const respText = `Your Response: ${ansVal || 'Not answered'} | Correct Answer: ${correctVal || 'N/A'}`;
           const respLines = pdf.splitTextToSize(respText, contentWidth - 16);
           formattedOpts.push({ optLines: respLines, isUserChoice: false, isCorrectChoice: false, isCorrect });
           optionsHeight += respLines.length * 4.5 + 4;
@@ -529,7 +634,7 @@ function ExamDone() {
         pdf.setFont("helvetica", "bold");
         pdf.setFontSize(8.5);
         pdf.setTextColor(isCorrect ? 6 : 153, isCorrect ? 95 : 27, isCorrect ? 70 : 27);
-        pdf.text(isCorrect ? "✓ Correct Response" : "✗ Incorrect Response", margin + 6, y + totalCardHeight - 3);
+        pdf.text(isCorrect ? "[CORRECT] Correct Response" : "[INCORRECT] Incorrect Response", margin + 6, y + totalCardHeight - 3);
 
         pdf.setTextColor(75, 85, 99);
         pdf.setFont("helvetica", "normal");
@@ -552,7 +657,7 @@ function ExamDone() {
       pdf.save(`exam-answers-${new Date().toISOString().split('T')[0]}.pdf`);
     } catch (err) {
       console.error('Error generating PDF:', err);
-      setError('Failed to generate PDF. Please try again.');
+      setPdfError(`Failed to generate PDF: ${err.message || 'Please try again.'}`);
     }
   };
 
@@ -659,6 +764,22 @@ function ExamDone() {
               <span className="latency-text">System Latency: 12ms</span>
             </div>
           </div>
+
+          {pdfError && (
+            <div style={{
+              width: '100%',
+              padding: '12px 16px',
+              marginBottom: '16px',
+              borderRadius: '8px',
+              backgroundColor: '#FEF2F2',
+              border: '1px solid #FCA5A5',
+              color: '#991B1B',
+              fontSize: '0.9rem',
+              boxSizing: 'border-box'
+            }}>
+              {pdfError}
+            </div>
+          )}
 
           {/* Action Buttons */}
           <div className="exam-done-actions">

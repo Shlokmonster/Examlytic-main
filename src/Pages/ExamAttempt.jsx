@@ -4,7 +4,7 @@ import { useParams, useNavigate } from "react-router-dom"
 import supabase from "../SupabaseClient"
 import Navbar from "../Components/common/Navbar"
 import { Room } from 'livekit-client';
-import { FaVideo, FaVideoSlash, FaDesktop, FaExclamationTriangle, FaUser, FaFlag, FaRegFlag, FaLock, FaChevronLeft, FaChevronRight, FaCalculator, FaCheckCircle, FaInfoCircle } from 'react-icons/fa';
+import { FaVideo, FaVideoSlash, FaDesktop, FaExclamationTriangle, FaUser, FaFlag, FaRegFlag, FaLock, FaChevronLeft, FaChevronRight, FaCalculator, FaCheckCircle, FaInfoCircle, FaPencilAlt, FaEraser, FaTrash, FaShieldAlt } from 'react-icons/fa';
 import { useReactMediaRecorder } from 'react-media-recorder';
 import { FilesetResolver, FaceLandmarker } from '@mediapipe/tasks-vision';
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
@@ -56,6 +56,30 @@ export default function ExamAttempt() {
   const lastFaceDetectionTimeRef = useRef(0);
   const FACE_DETECTION_INTERVAL_MS = 350; // Throttle AI face mesh to ~2.85 Hz (every 350ms) to prevent CPU/GPU starvation
   const [currentDateTime, setCurrentDateTime] = useState(new Date());
+  const [webcamReady, setWebcamReady] = useState(false);
+  const [referenceTab, setReferenceTab] = useState('notes'); // 'notes' | 'diagram'
+  const [diagramColor, setDiagramColor] = useState('#059669');
+  const [isEraser, setIsEraser] = useState(false);
+  const diagramCanvasRef = useRef(null);
+  const isDrawingRef = useRef(false);
+  const hasTriggeredBackSubmitRef = useRef(false);
+  const handleSubmitRef = useRef(null);
+  const [isFullscreenLocked, setIsFullscreenLocked] = useState(
+    typeof document !== 'undefined' ? Boolean(document.fullscreenElement) : false
+  );
+
+  const requestFullscreenLock = useCallback(async () => {
+    try {
+      const elem = document.documentElement;
+      if (!document.fullscreenElement) {
+        if (elem.requestFullscreen) await elem.requestFullscreen();
+        else if (elem.webkitRequestFullscreen) await elem.webkitRequestFullscreen();
+      }
+      setIsFullscreenLocked(Boolean(document.fullscreenElement || document.webkitFullscreenElement));
+    } catch (err) {
+      console.warn('[BrowserLock] Fullscreen request requires user gesture or was declined:', err);
+    }
+  }, []);
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentDateTime(new Date()), 1000);
@@ -692,13 +716,19 @@ export default function ExamAttempt() {
 
     try {
       console.log('Requesting webcam access...');
+      const preferredCameraId = localStorage.getItem('examlytic_preferred_camera_id');
+      const videoConstraints = {
+        width: { ideal: 640 },
+        height: { ideal: 480 },
+        frameRate: { ideal: 15, max: 24 },
+        facingMode: 'user'
+      };
+      if (preferredCameraId) {
+        videoConstraints.deviceId = { ideal: preferredCameraId };
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { 
-          width: { ideal: 640 },
-          height: { ideal: 480 },
-          frameRate: { ideal: 15, max: 24 },
-          facingMode: 'user'
-        }, 
+        video: videoConstraints, 
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
@@ -708,13 +738,14 @@ export default function ExamAttempt() {
       
       // Store the stream reference
       webcamStreamRef.current = stream;
+      setWebcamReady(true);
       
       // Setup video element
       if (videoRef.current) {
         console.log('Webcam access granted, setting up video element...');
         
         // Stop any existing tracks to prevent memory leaks
-        if (videoRef.current.srcObject) {
+        if (videoRef.current.srcObject && videoRef.current.srcObject !== stream) {
           videoRef.current.srcObject.getTracks().forEach(track => track.stop());
         }
         
@@ -723,6 +754,7 @@ export default function ExamAttempt() {
         videoRef.current.playsInline = true;
         videoRef.current.setAttribute('playsinline', '');
         videoRef.current.style.transform = 'scaleX(-1)'; // Mirror the video
+        videoRef.current.play().catch(err => console.warn('[Webcam] Play notice:', err));
         
         // Start detection when video is playing
         const onPlaying = () => {
@@ -1402,11 +1434,39 @@ export default function ExamAttempt() {
       }
     };
     
-    document.addEventListener('contextmenu', handleContextMenu);
+    const handleContextMenuStrict = (e) => {
+      e.preventDefault();
+      handleContextMenu(e);
+    };
+    document.addEventListener('contextmenu', handleContextMenuStrict);
 
-    // Detect keyboard shortcuts (Ctrl+C, Ctrl+V, etc.)
-    document.addEventListener('keydown', (e) => {
-      if (e.ctrlKey || e.metaKey) {
+    // Block and log restricted keyboard shortcuts (DevTools, Copy/Paste, View Source, Back Navigation)
+    const handleRestrictedKeyDown = (e) => {
+      const keyLower = (e.key || '').toLowerCase();
+      const isBackNavShortcut =
+        ((e.altKey || e.metaKey) && e.key === 'ArrowLeft') ||
+        e.key === 'BrowserBack';
+
+      if (isBackNavShortcut) {
+        e.preventDefault();
+        if (!hasTriggeredBackSubmitRef.current && isExamLoaded && !isSubmitting) {
+          hasTriggeredBackSubmitRef.current = true;
+          toast.warning('Back navigation detected! Your exam is being submitted automatically.');
+          handleSubmitRef.current?.(null, { isAutoSubmit: true });
+        }
+        return;
+      }
+
+      const isDevToolsShortcut =
+        e.key === 'F12' ||
+        ((e.ctrlKey || e.metaKey) && e.shiftKey && ['i', 'j', 'c'].includes(keyLower)) ||
+        ((e.ctrlKey || e.metaKey) && ['u', 'c', 'v', 'x', 'p', 's'].includes(keyLower));
+
+      if (isDevToolsShortcut) {
+        e.preventDefault();
+      }
+
+      if (e.ctrlKey || e.metaKey || e.key === 'F12') {
         const now = Date.now();
         if (now - lastLogTime.current > logCooldown) {
           logExamEvent(examAttemptId, studentId, 'KEYBOARD_SHORTCUT', {
@@ -1421,7 +1481,8 @@ export default function ExamAttempt() {
           lastLogTime.current = now;
         }
       }
-    });
+    };
+    document.addEventListener('keydown', handleRestrictedKeyDown);
 
     // Cleanup
     return () => {
@@ -1429,7 +1490,8 @@ export default function ExamAttempt() {
       document.removeEventListener('visibilitychange', visibilityChangeHandler);
       document.removeEventListener('mouseleave', mouseLeaveHandler);
       window.removeEventListener('blur', blurHandler);
-      document.removeEventListener('contextmenu', handleContextMenu);
+      document.removeEventListener('contextmenu', handleContextMenuStrict);
+      document.removeEventListener('keydown', handleRestrictedKeyDown);
       
       // Log exam end
       if (studentId) {
@@ -1452,14 +1514,19 @@ export default function ExamAttempt() {
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) handleTabSwitch();
     });
-    // Fullscreen exit
+    // Fullscreen lock & exit detection
     const handleFullscreen = () => {
-      if (!document.fullscreenElement) {
+      const inFullscreen = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+      setIsFullscreenLocked(inFullscreen);
+      if (!inFullscreen) {
         logEvent('fullscreen_exit', {});
-        // Fullscreen exited, logging silently
       }
     };
     document.addEventListener('fullscreenchange', handleFullscreen);
+    document.addEventListener('webkitfullscreenchange', handleFullscreen);
+    if (isExamLoaded) {
+      requestFullscreenLock();
+    }
     // Copy/cut/paste
     const preventCopy = e => { e.preventDefault(); logEvent('copy_cut_paste', { type: e.type }); };
     document.addEventListener('copy', preventCopy);
@@ -1475,6 +1542,7 @@ export default function ExamAttempt() {
     return () => {
       document.removeEventListener('visibilitychange', handleTabSwitch);
       document.removeEventListener('fullscreenchange', handleFullscreen);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreen);
       document.removeEventListener('copy', preventCopy);
       document.removeEventListener('cut', preventCopy);
       document.removeEventListener('paste', preventCopy);
@@ -1798,6 +1866,7 @@ export default function ExamAttempt() {
       navigate(`/exam/${examId}/done`, {
         state: {
           examId,
+          attemptId: currentAttemptId,
           answers,
           questions: questions, // Use the questions from state
           score: finalScore,
@@ -1812,6 +1881,114 @@ export default function ExamAttempt() {
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  // Keep ref pointing to latest handleSubmit for popstate / back-navigation auto-submit
+  useEffect(() => {
+    handleSubmitRef.current = handleSubmit;
+  });
+
+  // Attach webcam stream to <video> as soon as the exam UI mounts (fixes black/missing live feed)
+  useEffect(() => {
+    if (isLoading) return;
+    const stream = webcamStreamRef.current;
+    const videoEl = videoRef.current;
+    if (stream && videoEl) {
+      if (videoEl.srcObject !== stream) {
+        videoEl.srcObject = stream;
+      }
+      videoEl.muted = true;
+      videoEl.playsInline = true;
+      videoEl.setAttribute('playsinline', '');
+      videoEl.style.transform = 'scaleX(-1)';
+      videoEl.play().catch(err => console.warn('[Webcam] Auto-play notice:', err));
+
+      if (faceDetector && objectDetector && !detectionRunningRef.current) {
+        detectionRunningRef.current = true;
+        setDetectionRunning(true);
+        runDetections();
+      }
+    }
+  }, [isLoading, isExamLoaded, webcamReady, faceDetector, objectDetector, runDetections]);
+
+  // Auto-submit on browser Back button / popstate navigation once exam has started
+  useEffect(() => {
+    if (!isExamLoaded || isSubmitting) return;
+
+    window.history.pushState({ examSessionLock: true }, '', window.location.href);
+
+    const handlePopState = () => {
+      if (!hasTriggeredBackSubmitRef.current) {
+        hasTriggeredBackSubmitRef.current = true;
+        toast.warning('Browser back navigation detected! Submitting your exam automatically.');
+        if (studentId) {
+          logExamEvent(examAttemptId || examId, studentId, 'BACK_NAVIGATION_AUTO_SUBMIT', {
+            timestamp: new Date().toISOString()
+          });
+        }
+        handleSubmitRef.current?.(null, { isAutoSubmit: true });
+      }
+    };
+
+    const handleBeforeUnload = (e) => {
+      if (!hasTriggeredBackSubmitRef.current) {
+        e.preventDefault();
+        e.returnValue = 'Leaving this page will end your exam session.';
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isExamLoaded, isSubmitting, examAttemptId, examId, studentId]);
+
+  // Interactive Diagram Sketchpad helpers
+  const getCanvasCoordinates = (e, canvas) => {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    return {
+      x: (e.clientX - rect.left) * scaleX,
+      y: (e.clientY - rect.top) * scaleY
+    };
+  };
+
+  const startDiagramDraw = (e) => {
+    const canvas = diagramCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const { x, y } = getCanvasCoordinates(e, canvas);
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    isDrawingRef.current = true;
+  };
+
+  const drawDiagramMove = (e) => {
+    if (!isDrawingRef.current) return;
+    const canvas = diagramCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const { x, y } = getCanvasCoordinates(e, canvas);
+    ctx.lineWidth = isEraser ? 14 : 2.5;
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = isEraser ? '#ffffff' : diagramColor;
+    ctx.lineTo(x, y);
+    ctx.stroke();
+  };
+
+  const stopDiagramDraw = () => {
+    isDrawingRef.current = false;
+  };
+
+  const clearDiagramCanvas = () => {
+    const canvas = diagramCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
   };
 
   
@@ -2650,27 +2827,46 @@ export default function ExamAttempt() {
       {/* Floating status indicator for real-time proctor server connection */}
       <StatusIndicator />
 
-      {/* Header bar */}
+      {/* Header bar with consistent Examlytic | SECURE PORTAL logo */}
       <header className="exam-header-new">
         <div className="header-brand">
-          <div className="brand-logo-badge">
-            <FaLock size={16} />
-          </div>
-          <div className="brand-info-stack">
-            <div className="brand-name-row">
-              <span className="brand-name">Examlytic</span>
-              <span className="proctor-live-tag">Active Proctor</span>
-            </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 700, fontSize: '1.15rem' }}>
+            <span style={{ color: '#059669', letterSpacing: '0.03em', fontWeight: 800 }}>Examlytic</span>
+            <span style={{ color: '#D1D5DB', fontWeight: 300 }}>|</span>
+            <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#4B5563', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+              SECURE PORTAL
+            </span>
           </div>
           <div className="brand-divider" />
           <div className="exam-meta-wrap">
             <span className="exam-title-display">
-              {exam?.title || 'Midterm Assessment'}
+              {exam?.title || 'Assessment Workspace'}
             </span>
             {exam?.subject && <span className="exam-subject-badge">{exam.subject}</span>}
           </div>
         </div>
         <div className="header-controls">
+          <button
+            type="button"
+            onClick={requestFullscreenLock}
+            title={isFullscreenLocked ? 'Browser Lock Active (Fullscreen)' : 'Click to Activate Browser Lock (Fullscreen)'}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '7px 12px',
+              borderRadius: '8px',
+              fontSize: '12px',
+              fontWeight: 700,
+              cursor: isFullscreenLocked ? 'default' : 'pointer',
+              border: isFullscreenLocked ? '1px solid #a7f3d0' : '1px solid #fde68a',
+              backgroundColor: isFullscreenLocked ? '#ecfdf5' : '#fffbeb',
+              color: isFullscreenLocked ? '#047857' : '#b45309'
+            }}
+          >
+            <FaLock size={12} />
+            <span>{isFullscreenLocked ? 'Browser Locked' : 'Activate Lock'}</span>
+          </button>
           <div className={`timer-pill ${timeLeft < 60 ? 'timer-critical' : timeLeft < 300 ? 'timer-warning' : ''}`}>
             <span>⏱️</span>
             <span>{hours !== '00' ? `${hours}:${minutes}:${seconds}` : `${minutes}:${seconds}`}</span>
@@ -2679,11 +2875,48 @@ export default function ExamAttempt() {
             onClick={handleSubmit} 
             disabled={isSubmitting} 
             className="finish-exam-btn"
+            style={{ background: 'linear-gradient(135deg, #059669 0%, #047857 100%)', boxShadow: '0 2px 6px rgba(5, 150, 105, 0.25)' }}
           >
             Finish Exam
           </button>
         </div>
       </header>
+
+      {!isFullscreenLocked && (
+        <div style={{
+          backgroundColor: '#FFFBEB',
+          borderBottom: '1px solid #FDE68A',
+          padding: '10px 36px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '12px',
+          fontSize: '13px',
+          color: '#92400E'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600 }}>
+            <FaExclamationTriangle style={{ color: '#D97706' }} />
+            <span>Browser Lock (Fullscreen) is required. Note: Pressing the browser Back button will automatically submit your exam.</span>
+          </div>
+          <button
+            type="button"
+            onClick={requestFullscreenLock}
+            style={{
+              backgroundColor: '#D97706',
+              color: '#FFFFFF',
+              border: 'none',
+              borderRadius: '8px',
+              padding: '6px 14px',
+              fontSize: '12px',
+              fontWeight: 700,
+              cursor: 'pointer',
+              flexShrink: 0
+            }}
+          >
+            Enter Fullscreen Lock
+          </button>
+        </div>
+      )}
 
       {/* Three Column Grid Workspace */}
       <main className="exam-grid-new">
@@ -2757,11 +2990,11 @@ export default function ExamAttempt() {
           {/* Integrity Shield Card */}
           <div className="integrity-card-new">
             <div className="integrity-header">
-              <FaLock />
-              <span>Integrity Shield Active</span>
+              <FaShieldAlt />
+              <span>Integrity Shield &amp; Lock Active</span>
             </div>
             <div className="integrity-subtext">
-              Real-time video, screen activity, and audio compliance monitoring are strictly enabled.
+              Real-time video, screen, and browser session monitoring are enabled. <strong>Do not press the browser Back button or navigate away</strong> — doing so will automatically submit your exam.
             </div>
           </div>
         </section>
@@ -2860,7 +3093,7 @@ export default function ExamAttempt() {
 
         {/* Right Column */}
         <section className="sidebar-column">
-          {/* Reference Tools Card */}
+          {/* Reference Tools Card (Scratchpad & Diagram Sketchpad) */}
           <div className="sidebar-card">
             <div className="sidebar-card-title">
               <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -2868,23 +3101,138 @@ export default function ExamAttempt() {
                 <span>Reference Tools</span>
               </span>
             </div>
-            
-            <div className="tool-box-inner">
-              <div className="tool-box-title">Equation Helper</div>
-              <div className="tool-formula">
-                ∂L/∂w = (∂L/∂y) * (∂y/∂z) * (∂z/∂w)
-              </div>
+
+            {/* Switcher between Text Scratchpad and Diagram Sketchpad */}
+            <div style={{ display: 'flex', gap: '6px', marginBottom: '12px' }}>
+              <button
+                type="button"
+                onClick={() => setReferenceTab('notes')}
+                style={{
+                  flex: 1,
+                  padding: '6px 10px',
+                  borderRadius: '8px',
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  border: referenceTab === 'notes' ? '1.5px solid #059669' : '1px solid #E2E8F0',
+                  backgroundColor: referenceTab === 'notes' ? '#ECFDF5' : '#F8FAFC',
+                  color: referenceTab === 'notes' ? '#047857' : '#475569'
+                }}
+              >
+                Scratchpad
+              </button>
+              <button
+                type="button"
+                onClick={() => setReferenceTab('diagram')}
+                style={{
+                  flex: 1,
+                  padding: '6px 10px',
+                  borderRadius: '8px',
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '5px',
+                  border: referenceTab === 'diagram' ? '1.5px solid #059669' : '1px solid #E2E8F0',
+                  backgroundColor: referenceTab === 'diagram' ? '#ECFDF5' : '#F8FAFC',
+                  color: referenceTab === 'diagram' ? '#047857' : '#475569'
+                }}
+              >
+                <FaPencilAlt size={10} />
+                <span>Diagram Pad</span>
+              </button>
             </div>
 
-            <div className="tool-box-inner">
-              <div className="tool-box-title">Scratchpad</div>
-              <textarea 
-                className="scratchpad-area"
-                placeholder="Type your scratch notes here..."
-                value={notes}
-                onChange={e => setNotes(e.target.value)}
-              />
-            </div>
+            {referenceTab === 'notes' ? (
+              <div className="tool-box-inner">
+                <div className="tool-box-title">Quick Notes</div>
+                <textarea 
+                  className="scratchpad-area"
+                  style={{ height: '140px' }}
+                  placeholder="Type your scratch work, formulas, or notes here..."
+                  value={notes}
+                  onChange={e => setNotes(e.target.value)}
+                />
+              </div>
+            ) : (
+              <div className="tool-box-inner">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    {['#059669', '#1D4ED8', '#DC2626', '#111827'].map((col) => (
+                      <button
+                        type="button"
+                        key={col}
+                        onClick={() => { setDiagramColor(col); setIsEraser(false); }}
+                        style={{
+                          width: '16px',
+                          height: '16px',
+                          borderRadius: '50%',
+                          backgroundColor: col,
+                          border: !isEraser && diagramColor === col ? '2px solid #0f172a' : '1px solid #cbd5e1',
+                          cursor: 'pointer',
+                          padding: 0
+                        }}
+                        title="Pen color"
+                      />
+                    ))}
+                  </div>
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <button
+                      type="button"
+                      onClick={() => setIsEraser(!isEraser)}
+                      title="Toggle Eraser"
+                      style={{
+                        border: isEraser ? '1px solid #059669' : '1px solid #CBD5E1',
+                        backgroundColor: isEraser ? '#ECFDF5' : '#FFFFFF',
+                        color: isEraser ? '#059669' : '#475569',
+                        borderRadius: '6px',
+                        padding: '3px 7px',
+                        fontSize: '11px',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <FaEraser size={10} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={clearDiagramCanvas}
+                      title="Clear Diagram"
+                      style={{
+                        border: '1px solid #FECACA',
+                        backgroundColor: '#FEF2F2',
+                        color: '#DC2626',
+                        borderRadius: '6px',
+                        padding: '3px 7px',
+                        fontSize: '11px',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <FaTrash size={10} />
+                    </button>
+                  </div>
+                </div>
+                <canvas
+                  ref={diagramCanvasRef}
+                  width={240}
+                  height={160}
+                  onMouseDown={startDiagramDraw}
+                  onMouseMove={drawDiagramMove}
+                  onMouseUp={stopDiagramDraw}
+                  onMouseLeave={stopDiagramDraw}
+                  style={{
+                    width: '100%',
+                    height: '150px',
+                    backgroundColor: '#FFFFFF',
+                    border: '1px solid #CBD5E1',
+                    borderRadius: '8px',
+                    cursor: isEraser ? 'cell' : 'crosshair',
+                    display: 'block'
+                  }}
+                />
+              </div>
+            )}
           </div>
 
           {/* Quick Navigation Card */}
