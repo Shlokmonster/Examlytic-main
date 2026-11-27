@@ -13,6 +13,7 @@ import Examdone from "./Pages/Examdone";
 import ExamRedirect from "./Pages/ExamRedirect";
 import Examcode from "./Pages/Examcode";
 import LiveMonitoring from "./Components/LiveMonitoring";
+import { ExamActivityProvider } from "./context/ExamActivityProvider";
 import Diagnostics from "./Pages/Diagnostics";
 import Loader from "./Components/common/Loader";
 
@@ -49,6 +50,7 @@ function App() {
   }
 
   return (
+    <ExamActivityProvider enabled={role === "admin"}>
     <Routes>
       {/* Public / Authentication Route */}
       <Route path="/login" element={<Login />} />
@@ -185,6 +187,7 @@ function App() {
         }
       />
     </Routes>
+    </ExamActivityProvider>
   );
 }
 

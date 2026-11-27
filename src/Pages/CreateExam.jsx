@@ -6,6 +6,7 @@ import Navbar from "../Components/common/Navbar"
 import { ToastContainer, toast } from 'react-toastify'
 import 'react-toastify/dist/ReactToastify.css'
 import { generateExamQuestions } from "../utils/groqService"
+import { serializeExamConfig } from "../utils/examConfig"
 
 // Sample JSON structure for reference
 const SAMPLE_QUESTIONS = [
@@ -674,7 +675,7 @@ export default function CreateExam() {
       enable_calculator: enableCalculator,
       total_marks: totalMarks
     };
-    const instructionsWithConfig = `${instructions}\n\n---CONFIG---\n${JSON.stringify(config)}`;
+    const instructionsWithConfig = serializeExamConfig(instructions, config);
 
     const { error } = await supabase.from("exams").insert([
       {

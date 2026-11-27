@@ -13,6 +13,12 @@ import { uploadToCloudinary } from "../utils/cloudinary";
 import Loader from "../Components/common/Loader";
 import { toast } from 'react-toastify';
 import { fetchLiveKitToken, sendStudentHeartbeat, autoSaveAnswers, submitExamAttempt, fetchExamDetails } from "../services/examService";
+import {
+  logExamEvent,
+  flushPendingAttemptEvents,
+  flushQueuedExamEvents,
+} from "../services/examActivity";
+import { resolveExamConfigFlag } from "../utils/examConfig";
 
 export default function ExamAttempt() {
   const { id: examId } = useParams()
@@ -91,6 +97,55 @@ export default function ExamAttempt() {
   const lastObjectDetection = useRef(0);
   const objectDetectionCooldown = 30000; // 30 seconds between object detection checks
 
+  // ---- Issue #4: refs that keep async listeners/handlers on fresh values ----
+  const examAttemptIdRef = useRef(null)
+  const studentIdRef = useRef(null)
+  const examIdRef = useRef(examId)
+  const userIdRef = useRef(null)
+  const strictTabsRef = useRef(true)
+  const webcamProctoringRef = useRef(true)
+  // Per-event-type debounce map so one physical action -> one database row.
+  const lastEventTimes = useRef({})
+  // Pending WINDOW_BLUR timer, cancelled if the same action turns out to be a tab switch.
+  const blurTimerRef = useRef(null)
+  // Lifecycle / recording finalization guards to keep events idempotent.
+  const examStartedLoggedRef = useRef(false)
+  const examEndedLoggedRef = useRef(false)
+  const recordingFinalizedRef = useRef(false)
+  const unmountTimerRef = useRef(null)
+  const statusRef = useRef('idle')
+  const recordingBlobRef = useRef(null)
+  const processRecordingRef = useRef(null)
+  const stopRecordingRef = useRef(null)
+
+  useEffect(() => { examIdRef.current = examId }, [examId])
+  useEffect(() => { studentIdRef.current = studentId }, [studentId])
+
+  // Keep the attempt-id ref in sync and flush any events detected before the
+  // attempt row existed (they are held in memory, never written with null).
+  useEffect(() => {
+    examAttemptIdRef.current = examAttemptId
+    if (examAttemptId && studentId) {
+      flushPendingAttemptEvents({ attemptId: examAttemptId, studentId, examId })
+    }
+  }, [examAttemptId, studentId, examId])
+
+  // Respect per-exam configuration (undefined => legacy behaviour = enabled).
+  // The `exams` table has no strict_tabs/webcam_proctoring columns — the flags
+  // live in the `---CONFIG---` payload appended to `instructions` — so resolve
+  // them through the shared parser (a real column, if ever added, still wins).
+  useEffect(() => {
+    strictTabsRef.current = resolveExamConfigFlag(exam, 'strict_tabs')
+    webcamProctoringRef.current = resolveExamConfigFlag(exam, 'webcam_proctoring')
+  }, [exam])
+
+  // Replay locally queued events when connectivity returns.
+  useEffect(() => {
+    const handleOnline = () => { flushQueuedExamEvents() }
+    window.addEventListener('online', handleOnline)
+    return () => window.removeEventListener('online', handleOnline)
+  }, [])
+
   const formatTime = (totalSeconds) => {
     const hours = Math.floor(totalSeconds / 3600)
     const minutes = Math.floor((totalSeconds % 3600) / 60)
@@ -141,6 +196,7 @@ export default function ExamAttempt() {
   // Save flag to Supabase
   const saveFlag = useCallback(async (flagType, metadata = {}) => {
     try {
+      if (!webcamProctoringRef.current) return null;
       const now = new Date().toISOString();
       const { data: { user }, error: authError } = await supabase.auth.getUser();
       
@@ -680,6 +736,15 @@ export default function ExamAttempt() {
             console.log('[LiveKit] Screen sharing track ended');
             setIsScreenSharing(false);
             setConnectionStatus('Screen sharing ended by user');
+            if (!isDisposedRef.current) {
+              void logExamEvent('SCREEN_SHARE_STOPPED', {
+                message: 'Screen sharing stopped by the user',
+              }, {
+                attemptId: examAttemptIdRef.current,
+                studentId: studentIdRef.current,
+                examId: examIdRef.current,
+              });
+            }
             stopAllTracks(stream);
           };
         }
@@ -1270,178 +1335,91 @@ export default function ExamAttempt() {
     if (currentQuestionIndex > 0) setCurrentQuestionIndex(prev => prev - 1)
   }
 
-  const [_logs, setLogs] = useState([]);
-
-  // Log event locally and to Supabase with valid attempt reference
-  const logEvent = async (eventType, eventDetails = {}) => {
-    setLogs(prev => [...prev, { eventType, eventDetails, timestamp: new Date().toISOString() }]);
-    try {
-      const { data: userData } = await supabase.auth.getUser();
-      const targetAttemptId = currentAttemptIdRef.current || examAttemptId || null;
-      await supabase.from('exam_logs').insert([
-        {
-          exam_attempt_id: targetAttemptId,
-          student_id: userData?.user?.id || studentId,
-          event_type: eventType,
-          event_details: { ...eventDetails, exam_id: examId },
-        }
-      ]);
-    } catch (err) {
-      console.warn('Log error (non-fatal):', err);
-    }
-  };
-
-  // Log exam event with valid attempt reference
-  const logExamEvent = async (targetExamId, targetStudentId, eventType, eventDetails = {}) => {
-    const timestamp = new Date().toISOString();
-    const targetAttemptId = currentAttemptIdRef.current || examAttemptId || null;
-    const logData = {
-      timestamp,
-      exam_id: targetExamId || examId,
-      student_id: targetStudentId || studentId,
-      exam_attempt_id: targetAttemptId,
-      event_type: eventType,
-      ...eventDetails
-    };
-    
-    // Log to console for debugging
-    console.log(`[Exam Monitor] ${eventType}`, logData);
-    
-    try {
-      const { error } = await supabase
-        .from('exam_logs')
-        .insert([
-          { 
-            exam_attempt_id: targetAttemptId,
-            student_id: targetStudentId || studentId,
-            event_type: eventType,
-            event_details: { ...eventDetails, exam_id: targetExamId || examId }
-          }
-        ]);
-
-      if (error) {
-        console.warn('[Exam Monitor] Notice logging to Supabase (non-fatal):', error);
-      } else {
-        console.log(`[Exam Monitor] Successfully logged ${eventType} to Supabase`);
-      }
-    } catch (error) {
-      console.warn('[Exam Monitor] Error in logExamEvent (non-fatal):', error);
-    }
-  };
-
-  // Anti-cheating hooks
-  // Log suspicious activities
+  // Issue #4 — ONE consolidated activity listener system + Browser Lock enforcement.
   useEffect(() => {
-    console.log('[Exam Monitor] Setting up event listeners...');
-    
-    // Get student ID from auth
-    const initializeLogging = async () => {
-      console.log('[Exam Monitor] Getting user info...');
-      try {
-        const { data: { user }, error: authError } = await supabase.auth.getUser();
-        
-        if (authError) {
-          console.error('[Exam Monitor] Error getting user:', authError);
-          return;
-        }
-        
-        if (user) {
-          console.log('[Exam Monitor] User found:', user.id);
-          setStudentId(user.id);
-          
-          // Log initial exam start
-          logExamEvent(examId, user.id, 'EXAM_STARTED', {
-            timestamp: new Date().toISOString(),
-            message: 'Exam session started',
-            user_agent: navigator.userAgent,
-            screen_resolution: `${window.screen.width}x${window.screen.height}`,
-            window_size: `${window.innerWidth}x${window.innerHeight}`
-          });
-        }
-      } catch (err) {
-        console.error('[Exam Monitor] Error initializing logging:', err);
-      }
-    };
-    
-    initializeLogging();
-
-    // Tab visibility change handler
-    const handleVisibilityChange = () => {
-      console.log('[Exam Monitor] Visibility changed. Hidden:', document.hidden);
-      if (document.hidden && studentId) {
-        console.log('[Exam Monitor] Tab switch detected, logging...');
-        logExamEvent(examId, studentId, 'TAB_SWITCH', {
-          timestamp: new Date().toISOString(),
-          message: 'User switched tabs or minimized browser',
-          url: window.location.href
-        });
-      }
-    };
-
-    // Mouse leave handler
-    const handleMouseLeave = (e) => {
-      if (e.clientY <= 0 && studentId) {
-        logExamEvent(examId, studentId, 'MOUSE_LEAVE', {
-          timestamp: new Date().toISOString(),
-          message: 'Mouse left the browser window',
-          x_position: e.clientX,
-          y_position: e.clientY
-        });
-      }
-    };
-
-    // Window blur handler (alt+tab, win+tab, etc.)
-    const handleBlur = () => {
-      if (studentId) {
-        logExamEvent(examId, studentId, 'WINDOW_BLUR', {
-          timestamp: new Date().toISOString(),
-          message: 'Window lost focus',
-          url: window.location.href
-        });
-      }
-    };
-
-    // Add event listeners
-    console.log('[Exam Monitor] Adding event listeners...');
-    const visibilityChangeHandler = () => handleVisibilityChange();
-    const mouseLeaveHandler = (e) => handleMouseLeave(e);
-    const blurHandler = () => handleBlur();
-    
-    document.addEventListener('visibilitychange', visibilityChangeHandler);
-    document.addEventListener('mouseleave', mouseLeaveHandler);
-    window.addEventListener('blur', blurHandler);
-    
-    // Initial test logging
-    if (studentId) {
-      console.log('[Exam Monitor] Initial test log');
-      logExamEvent(examId, studentId, 'EXAM_VIEW_LOADED', {
-        timestamp: new Date().toISOString(),
-        message: 'Exam view loaded',
-        user_agent: navigator.userAgent
+    // Canonical emitter: resolves the *current* ids from refs (no stale closure)
+    // and debounces per event type so one physical action -> one row.
+    const emit = (eventType, details = {}, debounceMs = 1200) => {
+      const now = Date.now();
+      const last = lastEventTimes.current[eventType] || 0;
+      if (now - last < debounceMs) return;
+      lastEventTimes.current[eventType] = now;
+      void logExamEvent(eventType, details, {
+        attemptId: examAttemptIdRef.current,
+        studentId: studentIdRef.current,
+        examId: examIdRef.current,
       });
-    }
-
-    // Detect right-click
-    const handleContextMenu = (e) => {
-      if (studentId) {
-        logExamEvent(examId, studentId, 'RIGHT_CLICK', {
-          timestamp: new Date().toISOString(),
-          message: 'Right-click detected',
-          target_element: e.target.tagName,
-          page_x: e.pageX,
-          page_y: e.pageY
-        });
+    };
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        if (blurTimerRef.current) {
+          clearTimeout(blurTimerRef.current);
+          blurTimerRef.current = null;
+        }
+        if (!strictTabsRef.current) return;
+        emit('TAB_SWITCH', {
+          message: 'User switched tabs or minimized the browser',
+          url: window.location.href,
+        }, 1500);
+      } else {
+        if (blurTimerRef.current) {
+          clearTimeout(blurTimerRef.current);
+          blurTimerRef.current = null;
+        }
+        emit('WINDOW_FOCUS', {
+          message: 'Window/tab regained focus',
+          url: window.location.href,
+        }, 1500);
+        void flushQueuedExamEvents();
       }
     };
-    
-    const handleContextMenuStrict = (e) => {
-      e.preventDefault();
-      handleContextMenu(e);
-    };
-    document.addEventListener('contextmenu', handleContextMenuStrict);
 
-    // Block and log restricted keyboard shortcuts (DevTools, Copy/Paste, View Source, Back Navigation)
-    const handleRestrictedKeyDown = (e) => {
+    const handleWindowBlur = () => {
+      if (document.hidden) return;
+      if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
+      blurTimerRef.current = setTimeout(() => {
+        blurTimerRef.current = null;
+        emit('WINDOW_BLUR', {
+          message: 'Window lost focus',
+          url: window.location.href,
+        }, 1500);
+      }, 700);
+    };
+
+    const handleWindowFocus = () => {
+      if (blurTimerRef.current) {
+        clearTimeout(blurTimerRef.current);
+        blurTimerRef.current = null;
+      }
+    };
+
+    const handleFullscreenChange = () => {
+      const inFullscreen = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+      setIsFullscreenLocked(inFullscreen);
+      if (!inFullscreen) {
+        emit('FULLSCREEN_EXIT', {
+          message: 'Fullscreen mode exited',
+          url: window.location.href,
+        }, 1500);
+      }
+    };
+
+    const handleContextMenu = (e) => {
+      e.preventDefault();
+      emit('RIGHT_CLICK', {
+        message: 'Right-click detected',
+        target_element: e.target?.tagName,
+        page_x: e.pageX,
+        page_y: e.pageY,
+      }, 1000);
+    };
+
+    const handleCopyCutPaste = (e) => {
+      e.preventDefault();
+      emit('COPY_CUT_PASTE', { type: e.type, message: `Clipboard action: ${e.type}` }, 1000);
+    };
+
+    const handleKeyDown = (e) => {
       const keyLower = (e.key || '').toLowerCase();
       const isBackNavShortcut =
         ((e.altKey || e.metaKey) && e.key === 'ArrowLeft') ||
@@ -1449,7 +1427,7 @@ export default function ExamAttempt() {
 
       if (isBackNavShortcut) {
         e.preventDefault();
-        if (!hasTriggeredBackSubmitRef.current && isExamLoaded && !isSubmitting) {
+        if (!hasTriggeredBackSubmitRef.current && !isDisposedRef.current) {
           hasTriggeredBackSubmitRef.current = true;
           toast.warning('Back navigation detected! Your exam is being submitted automatically.');
           handleSubmitRef.current?.(null, { isAutoSubmit: true });
@@ -1466,102 +1444,90 @@ export default function ExamAttempt() {
         e.preventDefault();
       }
 
-      if (e.ctrlKey || e.metaKey || e.key === 'F12') {
-        const now = Date.now();
-        if (now - lastLogTime.current > logCooldown) {
-          logExamEvent(examAttemptId, studentId, 'KEYBOARD_SHORTCUT', {
-            timestamp: new Date().toISOString(),
-            key: e.key,
-            code: e.code,
-            ctrlKey: e.ctrlKey,
-            metaKey: e.metaKey,
-            altKey: e.altKey,
-            shiftKey: e.shiftKey
-          });
-          lastLogTime.current = now;
-        }
-      }
+      if (!(e.ctrlKey || e.metaKey || e.key === 'F12')) return;
+      const now = Date.now();
+      if (now - lastLogTime.current <= logCooldown) return;
+      lastLogTime.current = now;
+      emit('KEYBOARD_SHORTCUT', {
+        key: e.key,
+        code: e.code,
+        ctrlKey: e.ctrlKey,
+        metaKey: e.metaKey,
+        altKey: e.altKey,
+        shiftKey: e.shiftKey,
+        message: 'Keyboard shortcut detected',
+      }, 0);
     };
-    document.addEventListener('keydown', handleRestrictedKeyDown);
 
-    // Cleanup
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('blur', handleWindowBlur);
+    window.addEventListener('focus', handleWindowFocus);
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    document.addEventListener('contextmenu', handleContextMenu);
+    document.addEventListener('copy', handleCopyCutPaste);
+    document.addEventListener('cut', handleCopyCutPaste);
+    document.addEventListener('paste', handleCopyCutPaste);
+    document.addEventListener('keydown', handleKeyDown);
+
     return () => {
-      console.log('[Exam Monitor] Cleaning up event listeners...');
-      document.removeEventListener('visibilitychange', visibilityChangeHandler);
-      document.removeEventListener('mouseleave', mouseLeaveHandler);
-      window.removeEventListener('blur', blurHandler);
-      document.removeEventListener('contextmenu', handleContextMenuStrict);
-      document.removeEventListener('keydown', handleRestrictedKeyDown);
-      
-      // Log exam end
-      if (studentId) {
-        logExamEvent(examId, studentId, 'EXAM_ENDED', {
-          timestamp: new Date().toISOString(),
-          message: 'Exam session ended',
-          duration: 'Session duration not tracked in this version'
-        });
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('blur', handleWindowBlur);
+      window.removeEventListener('focus', handleWindowFocus);
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('contextmenu', handleContextMenu);
+      document.removeEventListener('copy', handleCopyCutPaste);
+      document.removeEventListener('cut', handleCopyCutPaste);
+      document.removeEventListener('paste', handleCopyCutPaste);
+      document.removeEventListener('keydown', handleKeyDown);
+      if (blurTimerRef.current) {
+        clearTimeout(blurTimerRef.current);
+        blurTimerRef.current = null;
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [examAttemptId, studentId]);
+  }, []);
 
+  // Request fullscreen lock when exam finishes loading
   useEffect(() => {
-    // Tab switch
-    const handleTabSwitch = () => {
-      logEvent('tab_switch', {});
-      // Tab switch detected, logging silently
-    };
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden) handleTabSwitch();
-    });
-    // Fullscreen lock & exit detection
-    const handleFullscreen = () => {
-      const inFullscreen = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
-      setIsFullscreenLocked(inFullscreen);
-      if (!inFullscreen) {
-        logEvent('fullscreen_exit', {});
-      }
-    };
-    document.addEventListener('fullscreenchange', handleFullscreen);
-    document.addEventListener('webkitfullscreenchange', handleFullscreen);
     if (isExamLoaded) {
       requestFullscreenLock();
     }
-    // Copy/cut/paste
-    const preventCopy = e => { e.preventDefault(); logEvent('copy_cut_paste', { type: e.type }); };
-    document.addEventListener('copy', preventCopy);
-    document.addEventListener('cut', preventCopy);
-    document.addEventListener('paste', preventCopy);
-    // Right-click
-    // const preventContext = e => { e.preventDefault(); logEvent('context_menu', {}); };
-    // document.addEventListener('contextmenu', preventContext);
-    // Window blur
-    const handleBlur = () => { logEvent('window_blur', {}); };
-    window.addEventListener('blur', handleBlur);
-    // Clean up
-    return () => {
-      document.removeEventListener('visibilitychange', handleTabSwitch);
-      document.removeEventListener('fullscreenchange', handleFullscreen);
-      document.removeEventListener('webkitfullscreenchange', handleFullscreen);
-      document.removeEventListener('copy', preventCopy);
-      document.removeEventListener('cut', preventCopy);
-      document.removeEventListener('paste', preventCopy);
-      // document.removeEventListener('contextmenu', preventContext);
-      window.removeEventListener('blur', handleBlur);
-      // Stop screen recording if it's active
-      if (status === 'recording') {
-        setRecordingReady(false);
-        stopRecording();
-        
-        // Start processing recording in the background
-        console.log('Starting background recording processing...');
-        processRecording(() => {
-          console.log('Background recording processing completed');
-        });
-      }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [examAttemptId]);
+  }, [isExamLoaded, requestFullscreenLock]);
+
+  // EXAM_STARTED — exactly once per attempt, as soon as the attempt id exists.
+  useEffect(() => {
+    if (!examAttemptId || !studentId) return;
+    if (examStartedLoggedRef.current) return;
+    examStartedLoggedRef.current = true;
+    void logExamEvent('EXAM_STARTED', {
+      message: 'Exam session started',
+      user_agent: navigator.userAgent,
+      screen_resolution: `${window.screen.width}x${window.screen.height}`,
+      window_size: `${window.innerWidth}x${window.innerHeight}`,
+    }, { attemptId: examAttemptId, studentId, examId });
+  }, [examAttemptId, studentId, examId]);
+
+  // EXAM_ENDED — idempotent, fired on submit / pagehide / real unmount.
+  const logExamEnded = useCallback((reason = 'unmount') => {
+    if (!examStartedLoggedRef.current) return;
+    if (examEndedLoggedRef.current) return;
+    examEndedLoggedRef.current = true;
+    void logExamEvent('EXAM_ENDED', {
+      message: 'Exam session ended',
+      reason,
+    }, {
+      attemptId: examAttemptIdRef.current,
+      studentId: studentIdRef.current,
+      examId: examIdRef.current,
+    });
+  }, []);
+
+  useEffect(() => {
+    const handlePageHide = () => logExamEnded('pagehide');
+    window.addEventListener('pagehide', handlePageHide);
+    return () => window.removeEventListener('pagehide', handlePageHide);
+  }, [logExamEnded]);
 
   // Function to calculate score
   const calculateScore = (answers, questions) => {
@@ -1666,7 +1632,7 @@ export default function ExamAttempt() {
         console.log('Recording uploaded successfully:', uploadResult.url);
         
         // If we have a valid attempt reference, update the record
-        const targetAttemptId = currentAttemptIdRef.current || examAttemptId;
+        const targetAttemptId = currentAttemptIdRef.current || examAttemptIdRef.current || examAttemptId;
         if (targetAttemptId) {
           console.log('Updating exam attempt with recording URL, attempt ID:', targetAttemptId);
           const { error: updateError } = await supabase
@@ -1705,6 +1671,68 @@ export default function ExamAttempt() {
       onComplete?.();
     }
   };
+
+  // ---------------------------------------------------------------------------
+  // Issue #4 — keep refs mirrored on the latest render values so the delayed
+  // unmount finalizer never reads a stale closure.
+  // ---------------------------------------------------------------------------
+  useEffect(() => { userIdRef.current = studentId }, [studentId])
+  useEffect(() => { statusRef.current = status }, [status])
+  useEffect(() => { recordingBlobRef.current = recordingBlob }, [recordingBlob])
+  useEffect(() => { processRecordingRef.current = processRecording })
+
+  useEffect(() => { stopRecordingRef.current = stopRecording })
+
+  // ---------------------------------------------------------------------------
+  // Issue #4 — single StrictMode-safe unmount finalizer.
+  //
+  // Logs EXAM_ENDED once AND finalizes the recording (processRecording ->
+  // Cloudinary), which previously lived inside the listener-cleanup effect that
+  // was removed during the listener consolidation. A delayed timer is used so
+  // React StrictMode's throwaway mount/unmount does not end the session or stop
+  // the recording: the re-mount body cancels the pending timer. The database is
+  // untouched — this only preserves the existing recording flow.
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    if (unmountTimerRef.current) {
+      clearTimeout(unmountTimerRef.current);
+      unmountTimerRef.current = null;
+    }
+
+    return () => {
+      unmountTimerRef.current = setTimeout(async () => {
+        unmountTimerRef.current = null;
+
+        logExamEnded('component_unmount');
+
+        // Finalize the recording at most once for this attempt.
+        if (recordingFinalizedRef.current) return;
+        recordingFinalizedRef.current = true;
+
+        try {
+          let blob = recordingBlobRef.current;
+
+          if (statusRef.current === 'recording') {
+            setRecordingReady(false);
+            const stopPromise = new Promise((resolve) => {
+              onStopResolver.current = resolve;
+            });
+            stopRecordingRef.current?.();
+            blob = await stopPromise;
+          }
+
+          if (blob) {
+            console.log('Starting background recording processing...');
+            processRecordingRef.current?.(blob, userIdRef.current, () => {
+              console.log('Background recording processing completed');
+            });
+          }
+        } catch (finalizeError) {
+          console.error('Error finalizing recording on unmount:', finalizeError);
+        }
+      }, 1200);
+    };
+  }, [logExamEnded]);
 
   // On submit, save answers and all logs
   const handleSubmit = async (e, options = {}) => {
@@ -1843,9 +1871,13 @@ export default function ExamAttempt() {
       }
 
       // 3. Log completion event
-      logExamEvent(examId, user.id, isExpired ? 'EXAM_EXPIRED' : 'EXAM_SUBMITTED', {
+      void logExamEvent(isExpired ? 'EXAM_EXPIRED' : 'EXAM_SUBMITTED', {
         score: finalScore,
         totalQuestions: questions.length
+      }, {
+        attemptId: currentAttemptId,
+        studentId: user.id,
+        examId
       });
 
       // 4. Mark older unsubmitted duplicate attempts as abandoned (never delete records)
@@ -1862,7 +1894,8 @@ export default function ExamAttempt() {
           });
       }
 
-      // 5. Navigate to the done page with the current state
+      // 5. Record intentional end & navigate to the done page with the current state
+      logExamEnded('submitted');
       navigate(`/exam/${examId}/done`, {
         state: {
           examId,
@@ -1922,8 +1955,12 @@ export default function ExamAttempt() {
         hasTriggeredBackSubmitRef.current = true;
         toast.warning('Browser back navigation detected! Submitting your exam automatically.');
         if (studentId) {
-          logExamEvent(examAttemptId || examId, studentId, 'BACK_NAVIGATION_AUTO_SUBMIT', {
+          void logExamEvent('BACK_NAVIGATION_AUTO_SUBMIT', {
             timestamp: new Date().toISOString()
+          }, {
+            attemptId: examAttemptIdRef.current || examAttemptId,
+            studentId,
+            examId
           });
         }
         handleSubmitRef.current?.(null, { isAutoSubmit: true });

@@ -1,13 +1,36 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { Room, RoomEvent } from 'livekit-client';
 import { fetchLiveKitToken } from '../services/examService';
 import { FaVolumeUp, FaVolumeMute, FaExpand, FaCompress, FaUser, FaExclamationTriangle, FaInfoCircle, FaDesktop } from 'react-icons/fa';
 import supabase from '../SupabaseClient';
+import { useExamActivity } from '../context/ExamActivityProvider';
 
-const LiveMonitoring = ({ examId: propExamId }) => {
+// Issue #4 Phase 1 — LiveKit identity is produced by ExamAttempt.jsx as
+//   `student-<fullStudentUuid>-<epochMs>`
+// The uuid itself contains hyphens, so the old `identity.split('-')[1]` only
+// ever returned the first 8 hex characters (e.g. "fa544fd6") and Postgres
+// rejected it with 22P02 (`invalid input syntax for type uuid`).
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** True only for a real uuid (never for "unknown" / a truncated fragment). */
+const isUuid = (value) => typeof value === 'string' && UUID_RE.test(value);
+
+// Issue #4 UX — how close to the bottom still counts as "at the bottom".
+const NEAR_BOTTOM_PX = 50;
+
+const LiveMonitoring = ({ examId: propExamId, liveEvents: propLiveEvents, connectionStatus: propConnectionStatus }) => {
   const { examId: routeExamId } = useParams();
   const examId = propExamId || routeExamId;
+  // Issue #4 — consume the SHARED admin activity channel. This component must
+  // never open its own Supabase Realtime subscription; when rendered
+  // standalone at /monitor/:examId it reads the same provider via context.
+  const activity = useExamActivity();
+  const liveEvents = useMemo(
+    () => propLiveEvents ?? activity.events ?? [],
+    [propLiveEvents, activity.events]
+  );
+  const connectionStatus = propConnectionStatus ?? activity.connectionStatus;
   const [students, setStudents] = useState([]);
   const [isMuted, setIsMuted] = useState({});
   const [fullscreen, setFullscreen] = useState(null);
@@ -17,6 +40,14 @@ const LiveMonitoring = ({ examId: propExamId }) => {
   const [isLogsOpen, setIsLogsOpen] = useState(false);
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState(null);
+
+  // Issue #4 UX — "↓ New activity" indicator + smart auto-scroll.
+  const logsListRef = useRef(null);
+  const [hasNewActivity, setHasNewActivity] = useState(false);
+  const prevLogsCountRef = useRef(0);
+  const prevStudentRef = useRef(null);
+  const prevLogsOpenRef = useRef(false);
+  const isNearBottomRef = useRef(true);
   const roomRef = useRef(null);
   const connections = useRef({});
   const videoRefs = useRef({});
@@ -41,23 +72,42 @@ const LiveMonitoring = ({ examId: propExamId }) => {
     return { attemptId: null, studentId: identity.replace(/^student-/, '') };
   }, []);
 
-  // Fetch all logs from the last 3 minutes
-  const fetchExamLogs = useCallback(async () => {
+  // Fetch the selected student's recent logs (bounded, correctly scoped).
+  // Phase 1 fix: `student_id` is a real uuid in Postgres, so a truncated
+  // LiveKit fragment (e.g. "fa544fd6") or "unknown" must never reach
+  // `.eq('student_id', ...)` — that returned 22P02 and broke this panel.
+  const fetchExamLogs = useCallback(async (studentId) => {
     try {
       setIsLoadingLogs(true);
-      
+      setError(null); // Fix 3: Retry must clear the previous error state.
+
+      // Fix 2 / Fix 4: refuse to send a non-uuid to PostgREST.
+      if (!isUuid(studentId)) {
+        setLogs([]);
+        setError(
+          studentId
+            ? 'This student has no valid identifier yet, so their activity cannot be loaded.'
+            : 'No student selected.'
+        );
+        return;
+      }
+
       // Calculate timestamp for 3 minutes ago
       const threeMinutesAgo = new Date();
       threeMinutesAgo.setMinutes(threeMinutesAgo.getMinutes() - 3);
-      
-      // Get all logs from the last 3 minutes
-      const { data, error } = await supabase
+
+      const query = supabase
         .from('exam_logs')
         .select('*')
-        .gte('created_at', threeMinutesAgo.toISOString());
-      
+        .eq('student_id', studentId)
+        .gte('created_at', threeMinutesAgo.toISOString())
+        .order('created_at', { ascending: false })
+        .limit(100);
+
+      const { data, error } = await query;
+
       if (error) throw error;
-      
+
       setLogs(data || []);
     } catch (err) {
       console.error('Error fetching logs:', err);
@@ -70,9 +120,89 @@ const LiveMonitoring = ({ examId: propExamId }) => {
   // Handle student selection for logs
   const handleStudentSelect = (studentId) => {
     setSelectedStudent(studentId);
+    setLogs([]); // never keep showing the previously selected student's rows
+    setHasNewActivity(false);
+    isNearBottomRef.current = true;
     fetchExamLogs(studentId);
     setIsLogsOpen(true);
   };
+
+  // Live log feed: the initial bounded fetch + the shared realtime events for
+  // the currently selected student, deduped by source:id.
+  const displayedLogs = useMemo(() => {
+    const keyOf = (row) => row.dedupeKey || `${row.source || 'exam_logs'}:${row.id}`;
+    const map = new Map();
+    (logs || []).forEach(row => { if (row) map.set(keyOf(row), row); });
+    (liveEvents || []).forEach(ev => {
+      if (!ev) return;
+      const sid = ev.student_id ?? ev.studentId ?? ev.user_id;
+      if (selectedStudent && String(sid) !== String(selectedStudent)) return;
+      map.set(keyOf(ev), ev);
+    });
+    return [...map.values()].sort(
+      (a, b) => new Date(a.created_at || a.createdAt || 0) - new Date(b.created_at || b.createdAt || 0)
+    );
+  }, [logs, liveEvents, selectedStudent]);
+
+  // --- "↓ New activity" indicator -------------------------------------------
+  // Only steal the viewport when the admin is already near the bottom. If they
+  // scrolled up to read older logs we keep their position and surface a button
+  // instead; clicking it smoothly jumps to the newest entry.
+  const scrollLogsToBottom = useCallback(() => {
+    const el = logsListRef.current;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    isNearBottomRef.current = true;
+    setHasNewActivity(false);
+  }, []);
+
+  const handleLogsScroll = useCallback(() => {
+    const el = logsListRef.current;
+    if (!el) return;
+    const nearBottom =
+      el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX;
+    isNearBottomRef.current = nearBottom;
+    if (nearBottom) setHasNewActivity(false);
+  }, []);
+
+  useEffect(() => {
+    const count = displayedLogs.length;
+    const prevCount = prevLogsCountRef.current;
+    const studentChanged = prevStudentRef.current !== selectedStudent;
+    const justOpened = isLogsOpen && !prevLogsOpenRef.current;
+
+    prevStudentRef.current = selectedStudent;
+    prevLogsOpenRef.current = isLogsOpen;
+
+    // New student selected: forget the previous student's scroll/indicator state.
+    if (studentChanged) {
+      prevLogsCountRef.current = count;
+      isNearBottomRef.current = true;
+      setHasNewActivity(false);
+      return;
+    }
+
+    const grew = count > prevCount;
+    prevLogsCountRef.current = count;
+
+    if (!isLogsOpen || !logsListRef.current) return;
+
+    if (grew) {
+      if (isNearBottomRef.current) {
+        scrollLogsToBottom();
+      } else {
+        setHasNewActivity(true);
+      }
+      return;
+    }
+
+    // Panel just (re)opened with existing rows: reveal the newest entry.
+    if (justOpened && count > 0) {
+      const el = logsListRef.current;
+      el.scrollTop = el.scrollHeight;
+      isNearBottomRef.current = true;
+      setHasNewActivity(false);
+    }
+  }, [displayedLogs.length, isLogsOpen, selectedStudent, scrollLogsToBottom]);
 
   // Cleanup function
   const cleanup = useCallback(() => {
@@ -378,8 +508,32 @@ const LiveMonitoring = ({ examId: propExamId }) => {
 
   // Format log messages with detailed information
   const formatLogMessage = (log) => {
-    const details = log.event_details || {};
-    
+    const details = log.event_details || log.payload || {};
+    const eventType = String(log.event_type || log.eventType || log.type || '').toUpperCase();
+
+    switch(eventType) {
+      case 'TAB_SWITCH':
+        return '⚠️ Tab switched';
+      case 'WINDOW_BLUR':
+        return '⚠️ Window lost focus';
+      case 'WINDOW_FOCUS':
+        return '✅ Window regained focus';
+      case 'FULLSCREEN_EXIT':
+        return '🖥️ Fullscreen mode exited';
+      case 'SCREEN_SHARE_STOPPED':
+        return '🖥️ Screen sharing stopped';
+      case 'RIGHT_CLICK':
+        return '🖱️ Right click detected';
+      case 'COPY_CUT_PASTE':
+        return '📋 Copy / cut / paste detected';
+      case 'KEYBOARD_SHORTCUT':
+        return '⌨️ Suspicious keyboard shortcut used';
+      case 'EXAM_STARTED':
+        return '▶️ Exam started';
+      case 'EXAM_ENDED':
+        return '⏹️ Exam ended';
+    }
+
     switch(log.event_type) {
       case 'tab_change':
         return `🔄 Tab changed to: ${details.url || 'Unknown URL'}`;
@@ -431,7 +585,9 @@ const LiveMonitoring = ({ examId: propExamId }) => {
       {error && (
         <div className="error-message">
           {error}
-          <button onClick={() => window.location.reload()}>Retry</button>
+          {selectedStudent && isUuid(selectedStudent) && (
+            <button onClick={() => fetchExamLogs(selectedStudent)}>Retry</button>
+          )}
         </div>
       )}
       
@@ -445,17 +601,22 @@ const LiveMonitoring = ({ examId: propExamId }) => {
           ) : (
             <div className="students-grid">
               {students.length > 0 ? (
-                students.map(student => (
-                  <div key={student.id}>
-                    {renderStudentVideo(student)}
-                    <button 
-                      className="view-logs-btn"
-                      onClick={() => handleStudentSelect(student.id)}
-                    >
-                      View Activity Logs
-                    </button>
-                  </div>
-                ))
+                students.map(student => {
+                  const canLoadLogs = isUuid(student.id);
+                  return (
+                    <div key={student.id}>
+                      {renderStudentVideo(student)}
+                      <button
+                        className="view-logs-btn"
+                        onClick={() => canLoadLogs && handleStudentSelect(student.id)}
+                        disabled={!canLoadLogs}
+                        title={canLoadLogs ? "View this student's recent activity" : "No valid student id for this participant yet"}
+                      >
+                        {canLoadLogs ? 'View Activity Logs' : 'Activity unavailable'}
+                      </button>
+                    </div>
+                  );
+                })
               ) : (
                 <div className="no-students">
                   <FaUser size={48} />
@@ -470,7 +631,12 @@ const LiveMonitoring = ({ examId: propExamId }) => {
         {isLogsOpen && (
           <div className="logs-section">
             <div className="logs-header">
-              <h3>🔍 Activity Monitor {selectedStudent ? `(Student ${selectedStudent.substring(0, 8)})` : '(Recent Events)'}</h3>
+              <h3>
+                🔍 Activity Monitor {selectedStudent ? `(Student ${selectedStudent.substring(0, 8)})` : '(Last 3 mins)'}
+                <span style={{ marginLeft: 10, fontSize: '0.72rem', fontWeight: 600, color: connectionStatus === 'SUBSCRIBED' ? '#10B981' : '#F59E0B' }}>
+                  ● {connectionStatus === 'SUBSCRIBED' ? 'Live' : connectionStatus === 'DISABLED' ? 'Offline' : 'Reconnecting…'}
+                </span>
+              </h3>
               <button 
                 className="close-logs"
                 onClick={() => {
@@ -488,21 +654,23 @@ const LiveMonitoring = ({ examId: propExamId }) => {
                 <div className="spinner"></div>
                 <p>Loading activity logs...</p>
               </div>
-            ) : logs.length > 0 ? (
-              <div className="logs-list">
-                {logs.map((log, index) => {
+            ) : displayedLogs.length > 0 ? (
+              <div className="logs-list" ref={logsListRef} onScroll={handleLogsScroll}>
+                {displayedLogs.map((log, index) => {
                   // Determine log severity
+                  const logType = String(log.event_type || log.eventType || log.type || '').toUpperCase();
                   const isWarning = [
-                    'tab_change', 'window_blur', 'print', 'devtools', 
-                    'inactivity', 'multiple_faces', 'face_not_visible',
-                    'tab_switch', 'fullscreen_exit', 'keyboard_shortcut'
-                  ].includes(log.event_type);
+                    'TAB_CHANGE', 'WINDOW_BLUR', 'PRINT', 'DEVTOOLS',
+                    'INACTIVITY', 'MULTIPLE_FACES', 'FACE_NOT_VISIBLE',
+                    'TAB_SWITCH', 'FULLSCREEN_EXIT', 'KEYBOARD_SHORTCUT',
+                    'SCREEN_SHARE_STOPPED', 'RIGHT_CLICK', 'COPY_CUT_PASTE'
+                  ].includes(logType);
                   
                   return (
                     <div 
                       key={index} 
                       className={`log-item ${isWarning ? 'warning' : 'info'}`}
-                      title={`Event type: ${log.event_type}`}
+                      title={`Event type: ${log.event_type || log.eventType || log.type || 'activity'}`}
                     >
                       <div className="log-icon">
                         {isWarning ? (
@@ -514,14 +682,16 @@ const LiveMonitoring = ({ examId: propExamId }) => {
                       <div className="log-content">
                         <div className="log-message">
                           <span className="student-id">
-                            {log.student_id ? `Student ${log.student_id.substring(0, 8)}` : 'System'}
+                            {log.student_id || log.studentId
+                            ? `Student ${String(log.student_id || log.studentId).substring(0, 8)}`
+                            : 'System'}
                           </span>
                           {' - '}
                           {formatLogMessage(log)}
                         </div>
                         <div className="log-timestamp">
-                          {new Date(log.created_at).toLocaleTimeString()}
-                          {log.event_details && Object.keys(log.event_details).length > 0 && (
+                          {new Date(log.created_at || log.createdAt || Date.now()).toLocaleTimeString()}
+                          {(log.event_details || log.payload) && Object.keys(log.event_details || log.payload).length > 0 && (
                             <span className="log-details" title={JSON.stringify(log.event_details, null, 2)}>
                               [Details]
                             </span>
@@ -536,6 +706,16 @@ const LiveMonitoring = ({ examId: propExamId }) => {
               <div className="no-logs">
                 <p>No recent activity detected</p>
               </div>
+            )}
+
+            {hasNewActivity && (
+              <button
+                type="button"
+                className="new-activity-indicator"
+                onClick={scrollLogsToBottom}
+              >
+                ↓ New activity
+              </button>
             )}
           </div>
         )}
@@ -571,6 +751,7 @@ const LiveMonitoring = ({ examId: propExamId }) => {
         }
         
         .logs-section {
+          position: relative;
           width: 40%;
           background: white;
           border-radius: 8px;
@@ -618,6 +799,33 @@ const LiveMonitoring = ({ examId: propExamId }) => {
           flex: 1;
           overflow-y: auto;
           max-height: 70vh;
+        }
+
+        .new-activity-indicator {
+          position: absolute;
+          left: 50%;
+          bottom: 12px;
+          transform: translateX(-50%);
+          background: #2563eb;
+          color: #fff;
+          border: none;
+          border-radius: 999px;
+          padding: 6px 14px;
+          font-size: 0.8rem;
+          font-weight: 600;
+          cursor: pointer;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+          z-index: 2;
+          animation: newActivityIn 0.25s ease;
+        }
+
+        .new-activity-indicator:hover {
+          background: #1d4ed8;
+        }
+
+        @keyframes newActivityIn {
+          from { opacity: 0; transform: translate(-50%, 6px); }
+          to { opacity: 1; transform: translate(-50%, 0); }
         }
         
         .log-item {
