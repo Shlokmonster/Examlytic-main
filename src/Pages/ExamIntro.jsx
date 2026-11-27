@@ -20,7 +20,6 @@ import mathAnim from "../assets/math.json";
 import csAnim from "../assets/cs.json";
 import physicsAnim from "../assets/physics.json";
 import defaultAnim from "../assets/default.json";
-import launchAnim from "../assets/launch.json";
 import "../ExamIntro.css";
 import Loader from "../Components/common/Loader";
 import { getDisplayInstructions } from "../utils/examConfig";
@@ -31,7 +30,7 @@ export default function ExamIntro() {
   const navigate = useNavigate();
   const { exam } = useOutletContext() || {};
   const [startingExam, setStartingExam] = useState(false);
-  const [userProfile, setUserProfile] = useState(null);
+  const [_userProfile, setUserProfile] = useState(null);
   const [showTechModal, setShowTechModal] = useState(false);
 
   useEffect(() => {

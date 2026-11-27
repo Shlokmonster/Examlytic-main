@@ -1,66 +1,20 @@
-import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect } from "react";
+import { useNavigate, useLocation } from "react-router-dom";
 import supabase from "../SupabaseClient";
 import Loader from "../Components/common/Loader";
+import { useAuth } from "../hooks/useAuth";
 
 function Login() {
     const navigate = useNavigate();
-    const [loading, setLoading] = useState(true);
+    const location = useLocation();
+    const { user, role, loading: authLoading } = useAuth();
 
     useEffect(() => {
-        const init = async () => {
-            await supabase.auth.signOut(); // optional: force re-login each time
-            const { data: { session } } = await supabase.auth.getSession();
-
-            if (session) {
-                const { id, email } = session.user;
-
-                // STEP 1: Check if user exists in 'users' table
-                const { data: userExists, error: userCheckError } = await supabase
-                    .from("users")
-                    .select("*")
-                    .eq("id", id)
-                    .single();
-
-                // STEP 2: If not exists, insert user with 'student' role
-                if (!userExists) {
-                    const { error: insertError } = await supabase
-                        .from("users")
-                        .insert([{ id, email, role: 'student' }]);
-
-                    if (insertError) {
-                        console.error("Error inserting new user:", insertError);
-                        alert("Failed to setup your account. Please try again.");
-                        return;
-                    }
-                }
-
-                // STEP 3: Fetch role
-                const { data: userData, error: roleFetchError } = await supabase
-                    .from("users")
-                    .select("role")
-                    .eq("email", email)
-                    .single();
-
-                if (roleFetchError) {
-                    console.error("Error fetching role:", roleFetchError);
-                    alert("Unable to determine user role. Please contact support.");
-                    return;
-                }
-
-                // STEP 4: Redirect based on role
-                if (userData?.role === "admin") {
-                    navigate("/");
-                } else {
-                    navigate("/examcode");
-                }
-            } else {
-                setLoading(false);
-            }
-        };
-
-        init();
-    }, [navigate]);
+        if (!authLoading && user && role) {
+            const redirectPath = location.state?.from?.pathname || (role === "admin" ? "/admin" : "/examcode");
+            navigate(redirectPath, { replace: true });
+        }
+    }, [user, role, authLoading, location.state, navigate]);
 
     const handleLogin = async () => {
         try {
@@ -99,7 +53,7 @@ function Login() {
             </header>
 
             <div className="cont1">
-                {loading ? (
+                {authLoading ? (
                     <Loader message="Checking session..." />
                 ) : (
                     <>

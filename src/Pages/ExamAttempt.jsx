@@ -4,13 +4,15 @@ import { useParams, useNavigate } from "react-router-dom"
 import supabase from "../SupabaseClient"
 import Navbar from "../Components/common/Navbar"
 import { Room } from 'livekit-client';
-import { FaVideo, FaVideoSlash, FaDesktop, FaExclamationTriangle, FaUser, FaFlag, FaRegFlag, FaLock, FaChevronLeft, FaChevronRight, FaCalculator, FaCheckCircle, FaInfoCircle } from 'react-icons/fa';
+import { FaVideo, FaVideoSlash, FaDesktop, FaExclamationTriangle, FaUser, FaFlag, FaRegFlag, FaLock, FaChevronLeft, FaChevronRight, FaCalculator, FaCheckCircle, FaInfoCircle, FaPencilAlt, FaEraser, FaTrash, FaShieldAlt } from 'react-icons/fa';
 import { useReactMediaRecorder } from 'react-media-recorder';
 import { FilesetResolver, FaceLandmarker } from '@mediapipe/tasks-vision';
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
 import * as tf from '@tensorflow/tfjs';
 import { uploadToCloudinary } from "../utils/cloudinary";
 import Loader from "../Components/common/Loader";
+import { toast } from 'react-toastify';
+import { fetchLiveKitToken, sendStudentHeartbeat, autoSaveAnswers, submitExamAttempt, fetchExamDetails } from "../services/examService";
 import {
   logExamEvent,
   flushPendingAttemptEvents,
@@ -29,26 +31,24 @@ export default function ExamAttempt() {
   const [timeLeft, setTimeLeft] = useState(5400)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
+  const [isExamLoaded, setIsExamLoaded] = useState(false)
   const [error, setError] = useState(null)
   const videoRef = useRef()
   const canvasRef = useRef()
   const webcamStreamRef = useRef(null)
   const screenStreamRef = useRef(null)
-  const manualMediaRecorderRef = useRef(null)
-  const recordedChunks = useRef([])
   const isInitializingAttempt = useRef(false)
   const onStopResolver = useRef(null)
   const isDisposedRef = useRef(false)
   const [examAttemptId, setExamAttemptId] = useState(null)
+  const currentAttemptIdRef = useRef(null)
+  const expiresAtRef = useRef(null)
   const [studentId, setStudentId] = useState(null)
   const lastLogTime = useRef(Date.now())
   const logCooldown = 5000 // 5 seconds cooldown between logs for the same event
   const roomRef = useRef(null)
-  const [peerId] = useState(`student-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`)
-  const adminPeerId = 'admin-dashboard';
   const [connectionStatus, setConnectionStatus] = useState('Connecting...');
   const [isScreenSharing, setIsScreenSharing] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
   const reconnectAttempts = useRef(0);
   const maxReconnectAttempts = 5;
   const [recordingUrl, setRecordingUrl] = useState(null);
@@ -57,16 +57,42 @@ export default function ExamAttempt() {
   const [detectionRunning, setDetectionRunning] = useState(false);
   const detectionRunningRef = useRef(false);
   const [flags, setFlags] = useState([]);
-  const [lastFlagTime, setLastFlagTime] = useState(0);
   const [flaggedQuestions, setFlaggedQuestions] = useState({});
   const [notes, setNotes] = useState('');
+  const lastFaceDetectionTimeRef = useRef(0);
+  const FACE_DETECTION_INTERVAL_MS = 350; // Throttle AI face mesh to ~2.85 Hz (every 350ms) to prevent CPU/GPU starvation
   const [currentDateTime, setCurrentDateTime] = useState(new Date());
+  const [webcamReady, setWebcamReady] = useState(false);
+  const [referenceTab, setReferenceTab] = useState('notes'); // 'notes' | 'diagram'
+  const [diagramColor, setDiagramColor] = useState('#059669');
+  const [isEraser, setIsEraser] = useState(false);
+  const diagramCanvasRef = useRef(null);
+  const isDrawingRef = useRef(false);
+  const hasTriggeredBackSubmitRef = useRef(false);
+  const handleSubmitRef = useRef(null);
+  const [isFullscreenLocked, setIsFullscreenLocked] = useState(
+    typeof document !== 'undefined' ? Boolean(document.fullscreenElement) : false
+  );
+
+  const requestFullscreenLock = useCallback(async () => {
+    try {
+      const elem = document.documentElement;
+      if (!document.fullscreenElement) {
+        if (elem.requestFullscreen) await elem.requestFullscreen();
+        else if (elem.webkitRequestFullscreen) await elem.webkitRequestFullscreen();
+      }
+      setIsFullscreenLocked(Boolean(document.fullscreenElement || document.webkitFullscreenElement));
+    } catch (err) {
+      console.warn('[BrowserLock] Fullscreen request requires user gesture or was declined:', err);
+    }
+  }, []);
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentDateTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
   const flagCooldown = 30000; // 30 seconds cooldown between flags of same type
+  const lastFlagTimers = useRef({});
   const suspiciousObjects = ['cell phone', 'book', 'laptop', 'tv', 'remote', 'mouse', 'keyboard'];
   const lastObjectDetection = useRef(0);
   const objectDetectionCooldown = 30000; // 30 seconds between object detection checks
@@ -82,8 +108,6 @@ export default function ExamAttempt() {
   const lastEventTimes = useRef({})
   // Pending WINDOW_BLUR timer, cancelled if the same action turns out to be a tab switch.
   const blurTimerRef = useRef(null)
-  // AI flag cooldown timers (previously referenced but never declared).
-  const lastFlagTimers = useRef({})
   // Lifecycle / recording finalization guards to keep events idempotent.
   const examStartedLoggedRef = useRef(false)
   const examEndedLoggedRef = useRef(false)
@@ -198,6 +222,7 @@ export default function ExamAttempt() {
       const flagData = {
         exam_id: examId,
         user_id: user.id,
+        exam_attempt_id: currentAttemptIdRef.current || examAttemptId || null,
         flag_type: flagType,
         timestamp: now,
         metadata: {
@@ -214,7 +239,7 @@ export default function ExamAttempt() {
       
       // Test Supabase connection first
       console.log('Testing Supabase connection...');
-      const { data: testData, error: testError } = await supabase
+      const { error: testError } = await supabase
         .from('exam_flags')
         .select('id')
         .limit(1);
@@ -260,6 +285,7 @@ export default function ExamAttempt() {
       });
       return null;
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [examId]);
 
   // Run object detection
@@ -304,19 +330,23 @@ export default function ExamAttempt() {
     } catch (error) {
       console.error('Error in object detection:', error);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [objectDetector, detectionRunning]);
 
   // Run face and object detection
   const runDetections = useCallback(async () => {
     if (!faceDetector || !detectionRunningRef.current || !videoRef.current) {
-      console.log('Detection not running. Check conditions:', {
-        faceDetector: !!faceDetector,
-        detectionRunning: detectionRunningRef.current,
-        videoRef: !!videoRef.current,
-        videoReady: videoRef.current?.readyState
-      });
       return;
     }
+
+    const nowTimestamp = Date.now();
+    if (nowTimestamp - lastFaceDetectionTimeRef.current < FACE_DETECTION_INTERVAL_MS) {
+      if (detectionRunningRef.current) {
+        requestAnimationFrame(runDetections);
+      }
+      return;
+    }
+    lastFaceDetectionTimeRef.current = nowTimestamp;
     
     const video = videoRef.current;
     if (video.readyState < 2) {
@@ -348,7 +378,7 @@ export default function ExamAttempt() {
           
           result.faceLandmarks.forEach(landmarks => {
             // Draw all mesh points
-            landmarks.forEach((pt, pIdx) => {
+            landmarks.forEach((pt) => {
               const px = pt.x * canvas.width;
               const py = pt.y * canvas.height;
               ctx.beginPath();
@@ -472,6 +502,7 @@ export default function ExamAttempt() {
         setTimeout(runDetections, 1000);
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [faceDetector, objectDetector, saveFlag]);
 
   // Run face detection
@@ -512,18 +543,16 @@ export default function ExamAttempt() {
   
   // Configure react-media-recorder with optimized settings
   const [recordingBlob, setRecordingBlob] = useState(null);
+  const [_isRecording, setIsRecording] = useState(false);
+  const [_recordingReady, setRecordingReady] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
-  const [recordingReady, setRecordingReady] = useState(false);
   const [uploadWarning, setUploadWarning] = useState(null);
 
   const {
     status,
     startRecording,
-    stopRecording,
-    mediaBlobUrl,
-    clearBlobUrl,
-    error: recordingError
+    stopRecording
   } = useReactMediaRecorder({
     screen: true,
     video: {
@@ -609,27 +638,19 @@ export default function ExamAttempt() {
       
       const { data: { user } } = await supabase.auth.getUser();
       const resolvedStudentName = user?.user_metadata?.full_name || user?.email || 'Student';
-      
-      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/rapid-task`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
-          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`
-        },
-        body: JSON.stringify({
-          roomName: `exam-${examId}`,
-          participantName: `student-${studentId || 'unknown'}-${Date.now()}`,
-          studentName: resolvedStudentName,
-          isPublisher: true
-        })
+      const effectiveAttemptId = currentAttemptIdRef.current || examAttemptId || 'attempt';
+      const effectiveStudentId = studentId || user?.id || 'unknown';
+
+      const { token, url } = await fetchLiveKitToken({
+        roomName: `exam-${examId}`,
+        participantName: `student___${effectiveAttemptId}___${effectiveStudentId}`,
+        studentName: resolvedStudentName,
+        isPublisher: true,
       });
 
-      if (!response.ok) {
-        throw new Error('Failed to get LiveKit token from server');
+      if (!url) {
+        throw new Error('LiveKit streaming server URL is missing from server response. Please verify configuration.');
       }
-
-      const { token, url } = await response.json();
 
       setConnectionStatus('Connecting to streaming server...');
       const room = new Room();
@@ -649,13 +670,37 @@ export default function ExamAttempt() {
         }, 2000);
       });
 
-      await room.connect(url || 'wss://0.peerjs.com', token);
+      await room.connect(url, token);
       console.log('Connected to LiveKit room:', room.name);
       setConnectionStatus('Connected to streaming server');
       reconnectAttempts.current = 0;
       roomRef.current = room;
 
-      // Now start screen share and publish track
+      // 1. Immediately publish webcam video track for proctor live monitoring
+      try {
+        let webcamStream = webcamStreamRef.current;
+        if (!webcamStream || webcamStream.getVideoTracks().length === 0 || !webcamStream.active) {
+          webcamStream = await setupWebcamStream();
+        }
+        if (webcamStream && webcamStream.getVideoTracks().length > 0) {
+          const cameraTrack = webcamStream.getVideoTracks()[0];
+          console.log('[LiveKit] Publishing student camera track...');
+          await room.localParticipant.publishTrack(cameraTrack, { name: 'camera' });
+        }
+      } catch (camErr) {
+        console.warn('[LiveKit] Could not publish camera track:', camErr);
+      }
+
+      // 2. Notify backend that the stream is now connected
+      if (effectiveAttemptId && effectiveAttemptId !== 'attempt') {
+        try {
+          await sendStudentHeartbeat(effectiveAttemptId, 'STREAM_CONNECTED');
+        } catch (hbErr) {
+          console.warn('[LiveKit] Initial heartbeat notice:', hbErr);
+        }
+      }
+
+      // 3. Start screen share and publish track (non-blocking)
       try {
         let stream = screenStreamRef.current;
         if (!stream || stream.getVideoTracks().length === 0 || !stream.active) {
@@ -667,59 +712,44 @@ export default function ExamAttempt() {
               height: { ideal: 720, max: 720 },
               frameRate: { ideal: 10, max: 15 }
             },
-            audio: {
-              echoCancellation: true,
-              noiseSuppression: true,
-              sampleRate: 44100
-            }
+            audio: false
           };
 
           stream = await navigator.mediaDevices.getDisplayMedia(constraints).catch(err => {
-            console.warn('Error with system audio, trying without:', err);
-            return navigator.mediaDevices.getDisplayMedia({
-              video: true,
-              audio: false
-            });
+            console.warn('[LiveKit] Screen sharing dismissed or not permitted:', err);
+            return null;
           });
 
-          screenStreamRef.current = stream;
-        } else {
-          console.log('Reusing existing active screen share stream');
-        }
-
-        setIsScreenSharing(true);
-        setConnectionStatus('Screen sharing active');
-
-        const videoTrack = stream.getVideoTracks()[0];
-        if (videoTrack) {
-          await room.localParticipant.publishTrack(videoTrack, { name: 'screen-share' });
-        }
-
-        // Handle track ended (user stops sharing)
-        videoTrack.onended = () => {
-          console.log('Screen sharing track ended');
-          setIsScreenSharing(false);
-          setConnectionStatus('Screen sharing ended by user');
-
-          // Only a genuine user/browser stop is a SCREEN_SHARE_STOPPED event.
-          // Intentional teardown (cleanupResources) sets isDisposedRef first and
-          // also nulls track.onended, so it never reaches this branch.
-          if (!isDisposedRef.current) {
-            void logExamEvent('SCREEN_SHARE_STOPPED', {
-              message: 'Screen sharing stopped by the user',
-            }, {
-              attemptId: examAttemptIdRef.current,
-              studentId: studentIdRef.current,
-              examId: examIdRef.current,
-            });
+          if (stream) {
+            screenStreamRef.current = stream;
           }
+        }
 
-          stopAllTracks(stream);
-        };
+        if (stream && stream.getVideoTracks().length > 0) {
+          setIsScreenSharing(true);
+          setConnectionStatus('Screen sharing active');
 
+          const videoTrack = stream.getVideoTracks()[0];
+          await room.localParticipant.publishTrack(videoTrack, { name: 'screen-share' });
+
+          videoTrack.onended = () => {
+            console.log('[LiveKit] Screen sharing track ended');
+            setIsScreenSharing(false);
+            setConnectionStatus('Screen sharing ended by user');
+            if (!isDisposedRef.current) {
+              void logExamEvent('SCREEN_SHARE_STOPPED', {
+                message: 'Screen sharing stopped by the user',
+              }, {
+                attemptId: examAttemptIdRef.current,
+                studentId: studentIdRef.current,
+                examId: examIdRef.current,
+              });
+            }
+            stopAllTracks(stream);
+          };
+        }
       } catch (err) {
-        console.error('Error starting screen share:', err);
-        setConnectionStatus('Screen sharing permission denied or failed');
+        console.warn('[LiveKit] Screen share setup note (camera feed active):', err);
       }
 
     } catch (error) {
@@ -728,7 +758,8 @@ export default function ExamAttempt() {
       reconnectAttempts.current++;
       setTimeout(setupPeerConnection, 2000);
     }
-  }, [examId, studentId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [examId, studentId, examAttemptId]);
 
   // Stop all tracks in a stream
   const stopAllTracks = (stream) => {
@@ -750,13 +781,19 @@ export default function ExamAttempt() {
 
     try {
       console.log('Requesting webcam access...');
+      const preferredCameraId = localStorage.getItem('examlytic_preferred_camera_id');
+      const videoConstraints = {
+        width: { ideal: 640 },
+        height: { ideal: 480 },
+        frameRate: { ideal: 15, max: 24 },
+        facingMode: 'user'
+      };
+      if (preferredCameraId) {
+        videoConstraints.deviceId = { ideal: preferredCameraId };
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { 
-          width: { ideal: 640 },
-          height: { ideal: 480 },
-          frameRate: { ideal: 15, max: 24 },
-          facingMode: 'user'
-        }, 
+        video: videoConstraints, 
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
@@ -766,13 +803,14 @@ export default function ExamAttempt() {
       
       // Store the stream reference
       webcamStreamRef.current = stream;
+      setWebcamReady(true);
       
       // Setup video element
       if (videoRef.current) {
         console.log('Webcam access granted, setting up video element...');
         
         // Stop any existing tracks to prevent memory leaks
-        if (videoRef.current.srcObject) {
+        if (videoRef.current.srcObject && videoRef.current.srcObject !== stream) {
           videoRef.current.srcObject.getTracks().forEach(track => track.stop());
         }
         
@@ -781,6 +819,7 @@ export default function ExamAttempt() {
         videoRef.current.playsInline = true;
         videoRef.current.setAttribute('playsinline', '');
         videoRef.current.style.transform = 'scaleX(-1)'; // Mirror the video
+        videoRef.current.play().catch(err => console.warn('[Webcam] Play notice:', err));
         
         // Start detection when video is playing
         const onPlaying = () => {
@@ -815,6 +854,7 @@ export default function ExamAttempt() {
       await saveFlag('WEBCAM_ACCESS_DENIED');
       return null;
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [faceDetector, detectionRunning, runDetections]);
 
   // Initialize detectors on component mount
@@ -876,30 +916,22 @@ export default function ExamAttempt() {
         webcamStreamRef.current = null;
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Removed dependencies to prevent re-runs
 
 
   useEffect(() => {
     const loadExam = async () => {
-      setIsLoading(true)
-      setError(null)
+      setIsLoading(true);
+      setError(null);
       try {
-        const { data: examData, error: examError } = await supabase
-          .from("exams")
-          .select("*")
-          .eq("id", examId)
-          .single()
-        if (examError) throw examError
-
-        setExam(examData)
-        
         if (isInitializingAttempt.current) {
           console.log('Already initializing exam attempt, skipping concurrent loadExam call.');
-          return;
+          return false;
         }
         isInitializingAttempt.current = true;
 
-        // Authenticate student
+        // 1. Authenticate student
         const { data: { user }, error: userError } = await supabase.auth.getUser();
         if (userError || !user) {
           isInitializingAttempt.current = false;
@@ -907,52 +939,197 @@ export default function ExamAttempt() {
         }
         setStudentId(user.id);
 
-        // Check for an active (unsubmitted) attempt for this student and exam
-        const { data: existingAttempt, error: attemptFetchError } = await supabase
+        // 2. Fetch basic exam metadata (title, duration_minutes, is_active)
+        const { data: examMeta, error: metaError } = await supabase
+          .from('exams')
+          .select('id, title, duration_minutes, is_active')
+          .eq('id', examId)
+          .maybeSingle();
+
+        if (metaError || !examMeta) {
+          isInitializingAttempt.current = false;
+          setError('Exam not found or unavailable.');
+          return false;
+        }
+
+        // Check if instructor has locked the exam from dashboard
+        if (examMeta.is_active === false) {
+          console.warn('[Exam Lifecycle] Exam is locked by instructor.');
+          isInitializingAttempt.current = false;
+          navigate(`/exam/${examId}/blocked`, { replace: true });
+          return false;
+        }
+
+        const durationMinutes = Number(examMeta.duration_minutes) || 90;
+        const durationSeconds = durationMinutes * 60;
+
+        // 3. Check if student already submitted or completed this exam
+        const { data: userProfile } = await supabase
+          .from('users')
+          .select('role')
+          .eq('id', user.id)
+          .maybeSingle();
+        const isUserAdmin = userProfile?.role === 'admin';
+
+        const { data: completedAttempt } = await supabase
           .from('exam_attempts')
-          .select('id, answers')
+          .select('id, submitted_at, completed_at, status')
+          .eq('exam_id', examId)
+          .eq('student_id', user.id)
+          .or('submitted_at.not.is.null,completed_at.not.is.null,status.eq.completed')
+          .maybeSingle();
+
+        // Non-admin students who already submitted cannot retake
+        if (completedAttempt && !isUserAdmin) {
+          console.log('Student has already submitted this exam, redirecting to completion page...');
+          isInitializingAttempt.current = false;
+          navigate(`/exam/${examId}/done`, { replace: true });
+          return false;
+        }
+
+        // 4. Check for an active (unsubmitted) attempt for this student and exam
+        const { data: existingAttempt } = await supabase
+          .from('exam_attempts')
+          .select('id, answers, created_at, started_at, status')
           .eq('exam_id', examId)
           .eq('student_id', user.id)
           .is('submitted_at', null)
           .maybeSingle();
 
-        let activeAttemptId = null;
+        let _activeAttemptId = null;
         let loadedAnswers = {};
+        let attemptStartTime = Date.now();
 
         if (existingAttempt) {
-          console.log('Resuming active attempt:', existingAttempt.id);
-          activeAttemptId = existingAttempt.id;
-          setExamAttemptId(existingAttempt.id);
-          if (existingAttempt.answers) {
-            loadedAnswers = existingAttempt.answers;
-            setAnswers(existingAttempt.answers);
+          const startTime = new Date(existingAttempt.started_at || existingAttempt.created_at).getTime();
+          const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startTime) / 1000));
+          const remainingSeconds = durationSeconds - elapsedSeconds;
+
+          // If attempt is actively in progress within its duration, resume it!
+          if (remainingSeconds > 0 && existingAttempt.status === 'in_progress') {
+            console.log('Resuming active in-flight attempt:', existingAttempt.id);
+            _activeAttemptId = existingAttempt.id;
+            currentAttemptIdRef.current = existingAttempt.id;
+            setExamAttemptId(existingAttempt.id);
+            attemptStartTime = startTime;
+            expiresAtRef.current = startTime + (durationSeconds * 1000);
+            setTimeLeft(remainingSeconds);
+
+            if (existingAttempt.answers) {
+              loadedAnswers = existingAttempt.answers;
+              setAnswers(existingAttempt.answers);
+            }
+          } else {
+            // Attempt is stale/expired from hours or days ago. Close it and start fresh!
+            console.log('[Exam Lifecycle] Closing stale attempt and provisioning fresh attempt:', existingAttempt.id);
+            await supabase
+              .from('exam_attempts')
+              .update({ status: 'expired' })
+              .eq('id', existingAttempt.id);
+
+            const nowIso = new Date().toISOString();
+            const { data: freshAttempt, error: freshErr } = await supabase
+              .from('exam_attempts')
+              .insert({
+                exam_id: examId,
+                student_id: user.id,
+                started_at: nowIso,
+                last_heartbeat_at: nowIso,
+                status: 'in_progress',
+                stream_status: 'STREAM_NOT_STARTED',
+                answers: {},
+                score: 0,
+                submitted_at: null,
+                completed_at: null
+              })
+              .select()
+              .single();
+
+            if (freshErr) throw freshErr;
+
+            _activeAttemptId = freshAttempt.id;
+            currentAttemptIdRef.current = freshAttempt.id;
+            setExamAttemptId(freshAttempt.id);
+            attemptStartTime = Date.now();
+            expiresAtRef.current = attemptStartTime + (durationSeconds * 1000);
+            setTimeLeft(durationSeconds);
+            setAnswers({});
           }
           isInitializingAttempt.current = false;
         } else {
           // Double-check to prevent concurrent insertion race in Strict Mode
           const { data: doubleCheckAttempt } = await supabase
             .from('exam_attempts')
-            .select('id, answers')
+            .select('id, answers, created_at, started_at, status')
             .eq('exam_id', examId)
             .eq('student_id', user.id)
             .is('submitted_at', null)
             .maybeSingle();
 
           if (doubleCheckAttempt) {
-            console.log('Race condition prevented, resuming verified attempt:', doubleCheckAttempt.id);
-            activeAttemptId = doubleCheckAttempt.id;
-            setExamAttemptId(doubleCheckAttempt.id);
-            if (doubleCheckAttempt.answers) {
-              loadedAnswers = doubleCheckAttempt.answers;
-              setAnswers(doubleCheckAttempt.answers);
+            const startTime = new Date(doubleCheckAttempt.started_at || doubleCheckAttempt.created_at).getTime();
+            const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startTime) / 1000));
+            const remainingSeconds = durationSeconds - elapsedSeconds;
+
+            if (remainingSeconds > 0 && doubleCheckAttempt.status === 'in_progress') {
+              console.log('Race condition prevented, resuming verified attempt:', doubleCheckAttempt.id);
+              _activeAttemptId = doubleCheckAttempt.id;
+              currentAttemptIdRef.current = doubleCheckAttempt.id;
+              setExamAttemptId(doubleCheckAttempt.id);
+              attemptStartTime = startTime;
+              expiresAtRef.current = startTime + (durationSeconds * 1000);
+              setTimeLeft(remainingSeconds);
+
+              if (doubleCheckAttempt.answers) {
+                loadedAnswers = doubleCheckAttempt.answers;
+                setAnswers(doubleCheckAttempt.answers);
+              }
+            } else {
+              await supabase
+                .from('exam_attempts')
+                .update({ status: 'expired' })
+                .eq('id', doubleCheckAttempt.id);
+
+              const nowIso = new Date().toISOString();
+              const { data: freshAttempt, error: freshErr } = await supabase
+                .from('exam_attempts')
+                .insert({
+                  exam_id: examId,
+                  student_id: user.id,
+                  started_at: nowIso,
+                  last_heartbeat_at: nowIso,
+                  status: 'in_progress',
+                  stream_status: 'STREAM_NOT_STARTED',
+                  answers: {},
+                  score: 0,
+                  submitted_at: null,
+                  completed_at: null
+                })
+                .select()
+                .single();
+
+              if (freshErr) throw freshErr;
+
+              _activeAttemptId = freshAttempt.id;
+              currentAttemptIdRef.current = freshAttempt.id;
+              setExamAttemptId(freshAttempt.id);
+              attemptStartTime = Date.now();
+              expiresAtRef.current = attemptStartTime + (durationSeconds * 1000);
+              setTimeLeft(durationSeconds);
+              setAnswers({});
             }
           } else {
             // Insert a new attempt record with submitted_at = null
+            const nowIso = new Date().toISOString();
             const { data: newAttempt, error: insertError } = await supabase
               .from('exam_attempts')
               .insert({
                 exam_id: examId,
                 student_id: user.id,
+                started_at: nowIso,
+                last_heartbeat_at: nowIso,
+                status: 'in_progress',
+                stream_status: 'STREAM_NOT_STARTED',
                 answers: {},
                 score: 0,
                 submitted_at: null,
@@ -962,87 +1139,103 @@ export default function ExamAttempt() {
               .single();
 
             if (insertError) {
-              console.error('Error starting exam attempt in DB:', insertError);
-              isInitializingAttempt.current = false;
-              throw new Error('Could not initialize exam session on the server. Please try again.');
+              // Backward-compatibility fallback if started_at/status columns are not yet applied to DB
+              console.warn('Initial insert with extended schema failed, retrying with core columns:', insertError.message);
+              const { data: fallbackAttempt, error: fallbackError } = await supabase
+                .from('exam_attempts')
+                .insert({
+                  exam_id: examId,
+                  student_id: user.id,
+                  answers: {},
+                  score: 0,
+                  submitted_at: null,
+                  completed_at: null
+                })
+                .select()
+                .single();
+
+              if (fallbackError) {
+                console.error('Error starting exam attempt in DB:', fallbackError);
+                isInitializingAttempt.current = false;
+                throw new Error('Could not initialize exam session on the server. Please try again.');
+              }
+              _activeAttemptId = fallbackAttempt.id;
+              currentAttemptIdRef.current = fallbackAttempt.id;
+              setExamAttemptId(fallbackAttempt.id);
+              attemptStartTime = new Date(fallbackAttempt.created_at).getTime();
+              expiresAtRef.current = attemptStartTime + (durationSeconds * 1000);
+              setTimeLeft(durationSeconds);
             } else {
               console.log('Created new exam attempt in DB:', newAttempt.id);
-              activeAttemptId = newAttempt.id;
+              _activeAttemptId = newAttempt.id;
+              currentAttemptIdRef.current = newAttempt.id;
               setExamAttemptId(newAttempt.id);
+              attemptStartTime = new Date(newAttempt.started_at || newAttempt.created_at).getTime();
+              expiresAtRef.current = attemptStartTime + (durationSeconds * 1000);
+              setTimeLeft(durationSeconds);
             }
           }
           isInitializingAttempt.current = false;
         }
 
-        if (examData.questions && Array.isArray(examData.questions)) {
-          const formattedQuestions = examData.questions.map((q, index) => ({
-            id: q.id || `q-${index}`,
-            question_text: q.question || q.question_text || '',
-            options: q.type === 'mcq' ? [q.optionA, q.optionB, q.optionC, q.optionD].filter(Boolean) : [],
-            correct_answer: q.correct_answer,
-            marks: q.marks || 1,
-            type: q.type || 'mcq',
-          }))
-          setQuestions(formattedQuestions)
-          
-          // Re-initialize answers if not loaded from active attempt
-          const initialAnswers = {}
-          formattedQuestions.forEach(q => {
-            initialAnswers[q.id] = loadedAnswers[q.id] !== undefined ? loadedAnswers[q.id] : '';
-          });
-          setAnswers(initialAnswers)
-          
-          setTimeLeft((examData.duration_minutes || 90) * 60)
-        } else {
-          setError('No questions found in this exam.')
+        // 5. Fetch sanitized exam configuration via secure RPC
+        // (Active attempt is verified in DB, so get_student_exam_questions_v1 will return questions)
+        const examData = await fetchExamDetails(examId);
+        setExam(examData);
+
+        if (!examData || !examData.questions || !Array.isArray(examData.questions) || examData.questions.length === 0) {
+          isInitializingAttempt.current = false;
+          setError('No questions found in this exam.');
+          return false;
         }
+
+        // Format and set questions
+        const formattedQuestions = examData.questions.map((q, index) => ({
+          id: q.id || `q-${index}`,
+          question_text: q.question || q.question_text || '',
+          options: q.type === 'mcq' ? [q.optionA, q.optionB, q.optionC, q.optionD].filter(Boolean) : (q.options || []),
+          marks: q.marks || 1,
+          type: q.type || 'mcq',
+        }));
+        setQuestions(formattedQuestions);
+        
+        // Re-initialize answers if not loaded from active attempt
+        const initialAnswers = {};
+        formattedQuestions.forEach(q => {
+          initialAnswers[q.id] = loadedAnswers[q.id] !== undefined ? loadedAnswers[q.id] : '';
+        });
+        setAnswers(initialAnswers);
+
+        setIsExamLoaded(true);
+        isInitializingAttempt.current = false;
+        return true;
       } catch (err) {
-        console.error(err)
-        setError(err.message || 'Failed to load exam.')
+        console.error(err);
+        setError(err.message || 'Failed to load exam.');
+        isInitializingAttempt.current = false;
+        return false;
       } finally {
-        setIsLoading(false)
+        setIsLoading(false);
       }
-    }
-
-    const setupWebcam = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true })
-        if (videoRef.current) videoRef.current.srcObject = stream
-      } catch (err) {
-        console.error("Webcam error:", err)
-      }
-    }
-
-    // Function to get the best supported MIME type
-    const getSupportedMimeType = () => {
-      const types = [
-        'video/mp4;codecs=h264,aac',  // MP4 with H.264 video and AAC audio
-        'video/webm;codecs=h264,opus', // WebM with H.264 video and Opus audio
-        'video/webm;codecs=vp9,opus',  // WebM with VP9 video and Opus audio
-        'video/webm;codecs=vp8,opus',  // WebM with VP8 video and Opus audio
-        'video/webm'                   // Fallback to default WebM
-      ];
-
-      return types.find(type => MediaRecorder.isTypeSupported(type)) || '';
     };
 
-    loadExam();
-    
-    // Initialize WebRTC and screen recording
-    const init = async () => {
+    // Sequential startup: setup webcam -> load exam & attempt -> connect LiveKit & recorder
+    const startAssessment = async () => {
       try {
         isDisposedRef.current = false;
         await setupWebcamStream();
-        await setupPeerConnection();
-        console.log('Starting screen recording via react-media-recorder...');
-        startRecording();
-      } catch (error) {
-        console.error('Initialization error:', error);
-        setConnectionStatus(`Error: ${error.message}`);
+        const attemptReady = await loadExam();
+        if (attemptReady) {
+          await setupPeerConnection();
+          console.log('Starting screen recording via react-media-recorder...');
+          startRecording();
+        }
+      } catch (err) {
+        console.error('Assessment startup error:', err);
       }
     };
-    
-    init();
+
+    startAssessment();
     
     // Set up periodic status updates
     const statusInterval = setInterval(() => {
@@ -1069,54 +1262,80 @@ export default function ExamAttempt() {
       if (roomRef.current) {
         roomRef.current.disconnect();
       }
-    }
-  }, [examId])
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [examId]);
 
+  // Authoritative Exam Countdown Timer
   useEffect(() => {
+    if (!isExamLoaded || !examAttemptId) return;
+
     if (timeLeft <= 0) {
-      handleSubmit()
-      return
+      toast.info("Exam time has expired. Submitting your assessment...");
+      handleSubmit(null, { isAutoSubmit: true });
+      return;
     }
-    const timer = setInterval(() => setTimeLeft(prev => prev - 1), 1000)
-    return () => clearInterval(timer)
-  }, [timeLeft])
+    const timer = setInterval(() => {
+      if (expiresAtRef.current) {
+        const remaining = Math.max(0, Math.floor((expiresAtRef.current - Date.now()) / 1000));
+        setTimeLeft(remaining);
+      } else {
+        setTimeLeft(prev => Math.max(0, prev - 1));
+      }
+    }, 1000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timeLeft, examAttemptId, isExamLoaded]);
+
+  // 15-second heartbeat ping for session vitality
+  useEffect(() => {
+    if (!examAttemptId) return;
+
+    const pingHeartbeat = async () => {
+      try {
+        const streamState = (roomRef.current && roomRef.current.state === 'connected')
+          ? 'STREAM_CONNECTED'
+          : (roomRef.current && roomRef.current.state === 'reconnecting')
+            ? 'STREAM_RECONNECTING'
+            : 'STREAM_DISCONNECTED';
+
+        await sendStudentHeartbeat(examAttemptId, streamState);
+      } catch (err) {
+        console.warn('[Heartbeat] Ping notice (non-fatal):', err);
+      }
+    };
+
+    pingHeartbeat();
+    const interval = setInterval(pingHeartbeat, 15000);
+    return () => clearInterval(interval);
+  }, [examAttemptId]);
 
   const handleOptionChange = async (questionId, selectedOption) => {
     setAnswers(prev => {
       const updated = { ...prev, [questionId]: selectedOption };
       
-      // Auto-save to Supabase
+      // Auto-save via examService (RPC or validated answers update)
       if (examAttemptId) {
-        supabase
-          .from('exam_attempts')
-          .update({ answers: updated })
-          .eq('id', examAttemptId)
-          .then(({ error }) => {
-            if (error) console.error('Error auto-saving answer:', error);
-          });
+        autoSaveAnswers(examAttemptId, updated);
       }
       return updated;
     });
   }
 
   const handleNextQuestion = () => {
-    if (currentQuestionIndex < questions.length - 1) setCurrentQuestionIndex(prev => prev + 1)
-    else handleSubmit()
+    if (!questions || questions.length === 0) return;
+    if (currentQuestionIndex < questions.length - 1) {
+      setCurrentQuestionIndex(prev => prev + 1);
+    } else {
+      handleSubmit();
+    }
   }
 
   const handlePreviousQuestion = () => {
     if (currentQuestionIndex > 0) setCurrentQuestionIndex(prev => prev - 1)
   }
 
-  // ---------------------------------------------------------------------------
-  // Issue #4 — ONE consolidated activity listener system.
-  //
-  // Previously multiple overlapping effects registered visibilitychange / blur /
-  // keydown / copy / cut / paste listeners, so one physical tab switch could
-  // write several rows (TAB_SWITCH + tab_switch + WINDOW_BLUR + window_blur) and
-  // some listeners were never removed. This single effect owns every listener
-  // with named handlers and exact-reference cleanup.
-  // ---------------------------------------------------------------------------
+  // Issue #4 — ONE consolidated activity listener system + Browser Lock enforcement.
   useEffect(() => {
     // Canonical emitter: resolves the *current* ids from refs (no stale closure)
     // and debounces per event type so one physical action -> one row.
@@ -1131,15 +1350,13 @@ export default function ExamAttempt() {
         examId: examIdRef.current,
       });
     };
-
     const handleVisibilityChange = () => {
       if (document.hidden) {
-        // Same physical action as window blur -> cancel the pending WINDOW_BLUR.
         if (blurTimerRef.current) {
           clearTimeout(blurTimerRef.current);
           blurTimerRef.current = null;
         }
-        if (!strictTabsRef.current) return; // strict_tabs disabled for this exam
+        if (!strictTabsRef.current) return;
         emit('TAB_SWITCH', {
           message: 'User switched tabs or minimized the browser',
           url: window.location.href,
@@ -1153,14 +1370,11 @@ export default function ExamAttempt() {
           message: 'Window/tab regained focus',
           url: window.location.href,
         }, 1500);
-        // Best-effort replay of anything queued while offline/erroring.
         void flushQueuedExamEvents();
       }
     };
 
     const handleWindowBlur = () => {
-      // A real tab switch is handled by visibilitychange; only record blur when
-      // the document is still visible (e.g. focus moved to another window).
       if (document.hidden) return;
       if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
       blurTimerRef.current = setTimeout(() => {
@@ -1180,7 +1394,9 @@ export default function ExamAttempt() {
     };
 
     const handleFullscreenChange = () => {
-      if (!document.fullscreenElement) {
+      const inFullscreen = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+      setIsFullscreenLocked(inFullscreen);
+      if (!inFullscreen) {
         emit('FULLSCREEN_EXIT', {
           message: 'Fullscreen mode exited',
           url: window.location.href,
@@ -1189,6 +1405,7 @@ export default function ExamAttempt() {
     };
 
     const handleContextMenu = (e) => {
+      e.preventDefault();
       emit('RIGHT_CLICK', {
         message: 'Right-click detected',
         target_element: e.target?.tagName,
@@ -1203,7 +1420,31 @@ export default function ExamAttempt() {
     };
 
     const handleKeyDown = (e) => {
-      if (!(e.ctrlKey || e.metaKey)) return;
+      const keyLower = (e.key || '').toLowerCase();
+      const isBackNavShortcut =
+        ((e.altKey || e.metaKey) && e.key === 'ArrowLeft') ||
+        e.key === 'BrowserBack';
+
+      if (isBackNavShortcut) {
+        e.preventDefault();
+        if (!hasTriggeredBackSubmitRef.current && !isDisposedRef.current) {
+          hasTriggeredBackSubmitRef.current = true;
+          toast.warning('Back navigation detected! Your exam is being submitted automatically.');
+          handleSubmitRef.current?.(null, { isAutoSubmit: true });
+        }
+        return;
+      }
+
+      const isDevToolsShortcut =
+        e.key === 'F12' ||
+        ((e.ctrlKey || e.metaKey) && e.shiftKey && ['i', 'j', 'c'].includes(keyLower)) ||
+        ((e.ctrlKey || e.metaKey) && ['u', 'c', 'v', 'x', 'p', 's'].includes(keyLower));
+
+      if (isDevToolsShortcut) {
+        e.preventDefault();
+      }
+
+      if (!(e.ctrlKey || e.metaKey || e.key === 'F12')) return;
       const now = Date.now();
       if (now - lastLogTime.current <= logCooldown) return;
       lastLogTime.current = now;
@@ -1222,6 +1463,7 @@ export default function ExamAttempt() {
     window.addEventListener('blur', handleWindowBlur);
     window.addEventListener('focus', handleWindowFocus);
     document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
     document.addEventListener('contextmenu', handleContextMenu);
     document.addEventListener('copy', handleCopyCutPaste);
     document.addEventListener('cut', handleCopyCutPaste);
@@ -1233,6 +1475,7 @@ export default function ExamAttempt() {
       window.removeEventListener('blur', handleWindowBlur);
       window.removeEventListener('focus', handleWindowFocus);
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
       document.removeEventListener('contextmenu', handleContextMenu);
       document.removeEventListener('copy', handleCopyCutPaste);
       document.removeEventListener('cut', handleCopyCutPaste);
@@ -1244,6 +1487,13 @@ export default function ExamAttempt() {
       }
     };
   }, []);
+
+  // Request fullscreen lock when exam finishes loading
+  useEffect(() => {
+    if (isExamLoaded) {
+      requestFullscreenLock();
+    }
+  }, [isExamLoaded, requestFullscreenLock]);
 
   // EXAM_STARTED — exactly once per attempt, as soon as the attempt id exists.
   useEffect(() => {
@@ -1283,7 +1533,7 @@ export default function ExamAttempt() {
   const calculateScore = (answers, questions) => {
     if (!answers || !questions || !questions.length) return 0;
     let correct = 0;
-    questions.forEach((q, index) => {
+    questions.forEach((q) => {
       if (q.correct_answer === answers[q.id]) {
         correct++;
       }
@@ -1381,10 +1631,10 @@ export default function ExamAttempt() {
       if (uploadResult?.url) {
         console.log('Recording uploaded successfully:', uploadResult.url);
         
-        // If we have a valid examAttemptId, update the record
-        const currentAttemptId = examAttemptIdRef.current;
-        if (currentAttemptId) {
-          console.log('Updating exam attempt with recording URL, attempt ID:', currentAttemptId);
+        // If we have a valid attempt reference, update the record
+        const targetAttemptId = currentAttemptIdRef.current || examAttemptIdRef.current || examAttemptId;
+        if (targetAttemptId) {
+          console.log('Updating exam attempt with recording URL, attempt ID:', targetAttemptId);
           const { error: updateError } = await supabase
             .from('exam_attempts')
             .update({ 
@@ -1392,7 +1642,7 @@ export default function ExamAttempt() {
               cloudinary_public_id: uploadResult.public_id,
               recording_duration: uploadResult.duration
             })
-            .eq('id', currentAttemptId);
+            .eq('id', targetAttemptId);
             
           if (updateError) {
             console.error('Error updating attempt with recording URL:', updateError);
@@ -1485,17 +1735,19 @@ export default function ExamAttempt() {
   }, [logExamEnded]);
 
   // On submit, save answers and all logs
-  const handleSubmit = async (e) => {
+  const handleSubmit = async (e, options = {}) => {
     if (e && typeof e.preventDefault === 'function') {
       e.preventDefault();
     }
-    if (!window.confirm("Are you sure you want to submit the exam? You cannot change your answers after submission.")) return;
+    const isAutoSubmit = options?.isAutoSubmit || false;
+    if (!isAutoSubmit) {
+      if (!window.confirm("Are you sure you want to submit the exam? You cannot change your answers after submission.")) return;
+    }
     
     setIsSubmitting(true);
     setError(null);
 
     let user = null;
-    let examQuestions = [];
     let currentAttemptId = examAttemptId; // Store the current attempt ID
 
     try {
@@ -1514,6 +1766,14 @@ export default function ExamAttempt() {
         
         const stopPromise = new Promise((resolve) => {
           onStopResolver.current = resolve;
+          // Safety timeout in case onStop event is delayed
+          setTimeout(() => {
+            if (onStopResolver.current) {
+              console.warn('stopRecording timeout elapsed (5s), proceeding with existing recordingBlob');
+              resolve(recordingBlob);
+              onStopResolver.current = null;
+            }
+          }, 5000);
         });
         
         stopRecording();
@@ -1523,115 +1783,128 @@ export default function ExamAttempt() {
         console.log('Received recording blob from stopped recorder:', blobToUpload);
       }
 
-      // Save answers (always, even if recording upload failed)
-      const updateFields = {
-        answers: answers,
-        submitted_at: new Date().toISOString(),
-        completed_at: new Date().toISOString(),
-        score: calculateScore(answers, questions), // Use the questions from state
-      };
-      
-      // Upload recording to Cloudinary synchronously in submission flow
-      if (blobToUpload) {
-        setIsUploading(true);
-        setUploadProgress(0);
-        console.log('Awaiting Cloudinary upload in submission flow...');
-        try {
-          const uploadResult = await uploadBlob(blobToUpload, user.id, (progress) => {
-            setUploadProgress(progress);
-          });
-          
-          if (uploadResult && uploadResult.url) {
-            updateFields.recording_url = uploadResult.url;
-            updateFields.cloudinary_public_id = uploadResult.public_id;
-            updateFields.recording_duration = uploadResult.duration;
-          }
-        } catch (uploadError) {
-          console.error('Recording upload failed:', uploadError);
-          setUploadWarning('Video upload failed, but your answers are saved.');
-        } finally {
-          setIsUploading(false);
-        }
-      }
-      
-      try {
-        // If we have a valid attempt ID, try to update, otherwise insert a new attempt
-      let attemptData;
-      
+      // 1. Submit answers to server for authoritative scoring & completion
+      let submitResult = null;
       if (currentAttemptId) {
-        // Try to update existing attempt
-        const { data: updated, error: updateError } = await supabase
-          .from('exam_attempts')
-          .update(updateFields)
-          .eq('id', currentAttemptId)
-          .select()
-          .single();
-          
-        if (updateError) {
-          console.error('Error updating attempt:', updateError);
-          // If update fails, we'll try to insert a new attempt
-          currentAttemptId = null;
-        } else {
-          attemptData = updated;
+        try {
+          submitResult = await submitExamAttempt(currentAttemptId, answers, questions);
+          console.log('Authoritative exam submission result:', submitResult);
+        } catch (subErr) {
+          console.warn('submitExamAttempt RPC notice, using fallback submission:', subErr);
         }
       }
-      
-      // If we don't have attempt data (either no ID or update failed), insert a new attempt
-      if (!attemptData) {
+
+      const finalScore = submitResult?.score !== undefined 
+        ? submitResult.score 
+        : calculateScore(answers, questions);
+      const isExpired = submitResult?.status === 'expired' || 
+        ((expiresAtRef.current && Date.now() > expiresAtRef.current) || timeLeft <= 0);
+
+      // If no attempt existed, initialize submission attempt
+      if (!currentAttemptId) {
+        const nowIso = new Date().toISOString();
         const insertFields = {
           exam_id: examId,
           student_id: user.id,
-          ...updateFields,
+          answers: answers,
+          submitted_at: nowIso,
+          completed_at: nowIso,
+          status: isExpired ? 'expired' : 'completed',
+          score: finalScore,
         };
-        
+
         const { data: inserted, error: insertError } = await supabase
           .from('exam_attempts')
           .insert([insertFields])
           .select()
           .single();
-          
+
         if (insertError || !inserted) {
           console.error('Error inserting attempt:', insertError);
           throw new Error('Could not save your answers to the server. Please inform your instructor.');
         }
-        
-        // Update the current attempt ID with the newly created one
+
         currentAttemptId = inserted.id;
-        attemptData = inserted;
       }
 
-      // Clean up duplicate unsubmitted attempts to prevent dangling active states on the dashboard
+      // 2. Upload video recording to Cloudinary with real-time feedback
+      let uploadWarningMsg = null;
+      if (blobToUpload && currentAttemptId) {
+        const savedAttemptId = currentAttemptId;
+        const savedUserId = user.id;
+        console.log('Uploading proctoring recording for attempt:', savedAttemptId);
+        setIsUploading(true);
+        setUploadProgress(0);
+
+        try {
+          const uploadPromise = uploadBlob(blobToUpload, savedUserId, (percent) => {
+            setUploadProgress(percent);
+          });
+
+          // Timeout safety: 45 seconds max
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Recording upload timed out after 45 seconds')), 45000)
+          );
+
+          const uploadResult = await Promise.race([uploadPromise, timeoutPromise]);
+
+          if (uploadResult?.url) {
+            console.log('Recording uploaded successfully to Cloudinary:', uploadResult.url);
+            setRecordingUrl(uploadResult.url);
+            await supabase
+              .from('exam_attempts')
+              .update({
+                recording_url: uploadResult.url,
+                cloudinary_public_id: uploadResult.public_id,
+                recording_duration: uploadResult.duration || 0
+              })
+              .eq('id', savedAttemptId);
+            console.log('Exam attempt successfully updated with recording URL');
+          }
+        } catch (uploadErr) {
+          console.warn('Recording upload notice (non-fatal):', uploadErr);
+          uploadWarningMsg = 'Screen recording upload could not complete due to network limits, but your answers were submitted successfully.';
+          setUploadWarning(uploadWarningMsg);
+        } finally {
+          setIsUploading(false);
+        }
+      }
+
+      // 3. Log completion event
+      void logExamEvent(isExpired ? 'EXAM_EXPIRED' : 'EXAM_SUBMITTED', {
+        score: finalScore,
+        totalQuestions: questions.length
+      }, {
+        attemptId: currentAttemptId,
+        studentId: user.id,
+        examId
+      });
+
+      // 4. Mark older unsubmitted duplicate attempts as abandoned (never delete records)
       if (currentAttemptId) {
         supabase
           .from('exam_attempts')
-          .delete()
+          .update({ status: 'abandoned' })
           .eq('exam_id', examId)
           .eq('student_id', user.id)
           .is('submitted_at', null)
           .neq('id', currentAttemptId)
           .then(({ error }) => {
-            if (error) console.error('Error cleaning up duplicate attempts:', error);
-            else console.log('Cleaned up duplicate unsubmitted attempts successfully');
+            if (error) console.warn('Mark older attempts notice:', error.message);
           });
       }
 
-      } catch (err) {
-        console.error('Error saving answers:', err);
-        throw new Error('Could not fully save your answers. Please inform your instructor.');
-      }
-      
-      // Issue #4 — record the intentional end of the attempt exactly once.
+      // 5. Record intentional end & navigate to the done page with the current state
       logExamEnded('submitted');
-
-      // Navigate to the done page with the current state
       navigate(`/exam/${examId}/done`, {
         state: {
           examId,
+          attemptId: currentAttemptId,
           answers,
           questions: questions, // Use the questions from state
-          score: calculateScore(answers, questions),
+          score: finalScore,
           totalQuestions: questions.length,
-          warning: uploadWarning,
+          warning: uploadWarningMsg || uploadWarning,
         }
       });
       
@@ -1641,6 +1914,118 @@ export default function ExamAttempt() {
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  // Keep ref pointing to latest handleSubmit for popstate / back-navigation auto-submit
+  useEffect(() => {
+    handleSubmitRef.current = handleSubmit;
+  });
+
+  // Attach webcam stream to <video> as soon as the exam UI mounts (fixes black/missing live feed)
+  useEffect(() => {
+    if (isLoading) return;
+    const stream = webcamStreamRef.current;
+    const videoEl = videoRef.current;
+    if (stream && videoEl) {
+      if (videoEl.srcObject !== stream) {
+        videoEl.srcObject = stream;
+      }
+      videoEl.muted = true;
+      videoEl.playsInline = true;
+      videoEl.setAttribute('playsinline', '');
+      videoEl.style.transform = 'scaleX(-1)';
+      videoEl.play().catch(err => console.warn('[Webcam] Auto-play notice:', err));
+
+      if (faceDetector && objectDetector && !detectionRunningRef.current) {
+        detectionRunningRef.current = true;
+        setDetectionRunning(true);
+        runDetections();
+      }
+    }
+  }, [isLoading, isExamLoaded, webcamReady, faceDetector, objectDetector, runDetections]);
+
+  // Auto-submit on browser Back button / popstate navigation once exam has started
+  useEffect(() => {
+    if (!isExamLoaded || isSubmitting) return;
+
+    window.history.pushState({ examSessionLock: true }, '', window.location.href);
+
+    const handlePopState = () => {
+      if (!hasTriggeredBackSubmitRef.current) {
+        hasTriggeredBackSubmitRef.current = true;
+        toast.warning('Browser back navigation detected! Submitting your exam automatically.');
+        if (studentId) {
+          void logExamEvent('BACK_NAVIGATION_AUTO_SUBMIT', {
+            timestamp: new Date().toISOString()
+          }, {
+            attemptId: examAttemptIdRef.current || examAttemptId,
+            studentId,
+            examId
+          });
+        }
+        handleSubmitRef.current?.(null, { isAutoSubmit: true });
+      }
+    };
+
+    const handleBeforeUnload = (e) => {
+      if (!hasTriggeredBackSubmitRef.current) {
+        e.preventDefault();
+        e.returnValue = 'Leaving this page will end your exam session.';
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isExamLoaded, isSubmitting, examAttemptId, examId, studentId]);
+
+  // Interactive Diagram Sketchpad helpers
+  const getCanvasCoordinates = (e, canvas) => {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    return {
+      x: (e.clientX - rect.left) * scaleX,
+      y: (e.clientY - rect.top) * scaleY
+    };
+  };
+
+  const startDiagramDraw = (e) => {
+    const canvas = diagramCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const { x, y } = getCanvasCoordinates(e, canvas);
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    isDrawingRef.current = true;
+  };
+
+  const drawDiagramMove = (e) => {
+    if (!isDrawingRef.current) return;
+    const canvas = diagramCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const { x, y } = getCanvasCoordinates(e, canvas);
+    ctx.lineWidth = isEraser ? 14 : 2.5;
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = isEraser ? '#ffffff' : diagramColor;
+    ctx.lineTo(x, y);
+    ctx.stroke();
+  };
+
+  const stopDiagramDraw = () => {
+    isDrawingRef.current = false;
+  };
+
+  const clearDiagramCanvas = () => {
+    const canvas = diagramCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
   };
 
   
@@ -1658,7 +2043,28 @@ export default function ExamAttempt() {
       />
     );
   }
-  if (error) return <div>{error}</div>;
+  if (error) {
+    return (
+      <div className="login-page" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div className="login-card" style={{ maxWidth: '480px', textAlign: 'center', padding: '32px' }}>
+          <div style={{ fontSize: '48px', marginBottom: '16px' }}>⚠️</div>
+          <h2 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#DC2626', marginBottom: '12px' }}>
+            Unable to Load Exam
+          </h2>
+          <p style={{ color: '#4B5563', fontSize: '0.95rem', lineHeight: '1.5', marginBottom: '24px' }}>
+            {error}
+          </p>
+          <button 
+            className="next-question-btn"
+            style={{ width: '100%', justifyContent: 'center' }}
+            onClick={() => navigate('/examcode')}
+          >
+            Return to Dashboard
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // Status indicator component with improved styling and animations
   const StatusIndicator = () => {
@@ -1771,8 +2177,8 @@ export default function ExamAttempt() {
           background: #f8fafc !important;
           margin: 0;
           padding: 0;
-          font-family: 'Inter', -apple-system, sans-serif;
-          color: #1e293b;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+          color: #0f172a;
         }
         .exam-workspace-new {
           min-height: 100vh;
@@ -1784,35 +2190,85 @@ export default function ExamAttempt() {
           display: flex;
           justify-content: space-between;
           align-items: center;
-          padding: 16px 40px;
-          background: #fff;
+          padding: 14px 36px;
+          background: rgba(255, 255, 255, 0.95);
+          backdrop-filter: blur(16px);
+          -webkit-backdrop-filter: blur(16px);
           border-bottom: 1px solid #e2e8f0;
           position: sticky;
           top: 0;
           z-index: 100;
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
         }
         .header-brand {
           display: flex;
           align-items: center;
-          gap: 15px;
+          gap: 14px;
+        }
+        .brand-logo-badge {
+          width: 36px;
+          height: 36px;
+          border-radius: 10px;
+          background: linear-gradient(135deg, #4f46e5 0%, #06b6d4 100%);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #ffffff;
+          box-shadow: 0 2px 6px rgba(79, 70, 229, 0.25);
+        }
+        .brand-info-stack {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+        .brand-name-row {
+          display: flex;
+          align-items: center;
+          gap: 8px;
         }
         .brand-name {
-          font-size: 22px;
+          font-size: 19px;
           font-weight: 800;
-          color: #3b82f6;
-          letter-spacing: -0.5px;
+          color: #0f172a;
+          letter-spacing: -0.4px;
+        }
+        .proctor-live-tag {
+          font-size: 10px;
+          font-weight: 700;
+          color: #059669;
+          background: #ecfdf5;
+          border: 1px solid #a7f3d0;
+          padding: 2px 7px;
+          border-radius: 100px;
+          letter-spacing: 0.5px;
+          text-transform: uppercase;
         }
         .brand-divider {
           width: 1px;
-          height: 20px;
-          background: #cbd5e1;
+          height: 24px;
+          background: #e2e8f0;
+        }
+        .exam-meta-wrap {
+          display: flex;
+          align-items: center;
+          gap: 10px;
         }
         .exam-title-display {
-          font-size: 13px;
+          font-size: 14px;
           font-weight: 700;
-          color: #64748b;
-          letter-spacing: 0.5px;
-          text-transform: uppercase;
+          color: #334155;
+          max-width: 380px;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .exam-subject-badge {
+          font-size: 11px;
+          font-weight: 600;
+          color: #4f46e5;
+          background: #eef2ff;
+          padding: 3px 8px;
+          border-radius: 6px;
         }
         .header-controls {
           display: flex;
@@ -1823,42 +2279,64 @@ export default function ExamAttempt() {
           display: flex;
           align-items: center;
           gap: 8px;
-          background: #f1f5f9;
-          color: #334155;
-          padding: 8px 16px;
-          border-radius: 8px;
-          font-family: monospace;
+          background: #ffffff;
+          color: #1e293b;
+          padding: 8px 18px;
+          border-radius: 10px;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
           font-size: 16px;
           font-weight: 700;
-          border: 1px solid #e2e8f0;
+          border: 1.5px solid #e2e8f0;
+          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+          transition: all 0.25s ease;
+        }
+        .timer-warning {
+          background: #fffbeb;
+          color: #b45309;
+          border-color: #fde68a;
+        }
+        .timer-critical {
+          background: #fef2f2;
+          color: #dc2626;
+          border-color: #fecaca;
+          animation: timerPulse 1s infinite alternate;
+        }
+        @keyframes timerPulse {
+          0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.4); }
+          100% { transform: scale(1.02); box-shadow: 0 0 0 6px rgba(220, 38, 38, 0); }
         }
         .finish-exam-btn {
-          background: #4f46e5;
-          color: #fff;
+          background: linear-gradient(135deg, #4f46e5 0%, #4338ca 100%);
+          color: #ffffff;
           border: none;
-          border-radius: 8px;
-          padding: 10px 20px;
+          border-radius: 10px;
+          padding: 10px 22px;
           font-weight: 600;
           font-size: 14px;
           cursor: pointer;
-          transition: all 0.2s ease;
-          box-shadow: 0 2px 4px rgba(79, 70, 229, 0.15);
+          transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+          box-shadow: 0 2px 6px rgba(79, 70, 229, 0.25);
         }
         .finish-exam-btn:hover {
-          background: #4338ca;
-          box-shadow: 0 4px 8px rgba(79, 70, 229, 0.25);
+          background: linear-gradient(135deg, #4338ca 0%, #3730a3 100%);
+          box-shadow: 0 4px 12px rgba(79, 70, 229, 0.35);
+          transform: translateY(-1px);
+        }
+        .finish-exam-btn:active {
+          transform: translateY(0);
         }
         .finish-exam-btn:disabled {
           background: #94a3b8;
           cursor: not-allowed;
           box-shadow: none;
+          transform: none;
         }
         .exam-grid-new {
           display: grid;
-          grid-template-columns: 280px 1fr 280px;
+          grid-template-columns: 290px 1fr 290px;
           gap: 24px;
-          padding: 24px 40px;
-          max-width: 1440px;
+          padding: 24px 36px;
+          max-width: 1520px;
           margin: 0 auto;
           width: 100%;
           box-sizing: border-box;
@@ -1869,34 +2347,42 @@ export default function ExamAttempt() {
           gap: 20px;
         }
         .sidebar-card {
-          background: #fff;
-          border-radius: 12px;
+          background: #ffffff;
+          border-radius: 14px;
           border: 1px solid #e2e8f0;
           padding: 20px;
-          box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
         }
         .sidebar-card-title {
-          font-size: 11px;
-          font-weight: 800;
+          font-size: 12px;
+          font-weight: 700;
           color: #64748b;
-          letter-spacing: 1px;
+          letter-spacing: 0.8px;
           text-transform: uppercase;
           margin-bottom: 16px;
           display: flex;
           align-items: center;
-          gap: 8px;
+          justify-content: space-between;
+        }
+        .palette-stats-badge {
+          font-size: 11px;
+          color: #4f46e5;
+          background: #eef2ff;
+          padding: 2px 8px;
+          border-radius: 6px;
+          font-weight: 700;
         }
         .webcam-card-new {
           position: relative;
-          border-radius: 12px;
+          border-radius: 14px;
           overflow: hidden;
-          background: #f1f5f9;
+          background: #0f172a;
           aspect-ratio: 4/3;
           display: flex;
           align-items: center;
           justify-content: center;
           border: 1px solid #e2e8f0;
-          box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
         }
         .webcam-video {
           width: 100%;
@@ -1914,24 +2400,47 @@ export default function ExamAttempt() {
           z-index: 5;
           transform: scaleX(-1);
         }
-        .webcam-placeholder {
+        .webcam-live-badge {
+          position: absolute;
+          top: 10px;
+          left: 10px;
           display: flex;
-          flex-direction: column;
           align-items: center;
-          gap: 8px;
-          color: #94a3b8;
+          gap: 6px;
+          background: rgba(15, 23, 42, 0.75);
+          color: #ffffff;
+          font-size: 10px;
+          font-weight: 700;
+          padding: 4px 9px;
+          border-radius: 100px;
+          backdrop-filter: blur(6px);
+          letter-spacing: 0.4px;
+          z-index: 10;
+        }
+        .pulse-dot {
+          width: 7px;
+          height: 7px;
+          border-radius: 50%;
+          background: #10b981;
+          box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.35);
+          animation: pulseGreen 1.6s infinite;
+        }
+        @keyframes pulseGreen {
+          0% { transform: scale(1); opacity: 1; }
+          50% { transform: scale(1.3); opacity: 0.7; }
+          100% { transform: scale(1); opacity: 1; }
         }
         .webcam-timestamp {
           position: absolute;
-          bottom: 8px;
-          left: 8px;
+          bottom: 10px;
+          left: 10px;
           background: rgba(15, 23, 42, 0.75);
-          color: #fff;
-          font-family: monospace;
+          color: #ffffff;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
           font-size: 11px;
-          padding: 4px 8px;
-          border-radius: 4px;
-          backdrop-filter: blur(4px);
+          padding: 3px 8px;
+          border-radius: 6px;
+          backdrop-filter: blur(6px);
           pointer-events: none;
           z-index: 10;
         }
@@ -1947,38 +2456,46 @@ export default function ExamAttempt() {
           display: flex;
           align-items: center;
           justify-content: center;
-          background: #fff;
+          background: #ffffff;
           border: 1.5px solid #e2e8f0;
-          border-radius: 8px;
+          border-radius: 10px;
           font-size: 14px;
           font-weight: 600;
           color: #334155;
           cursor: pointer;
-          transition: all 0.2s ease;
+          transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
         }
         .q-num-btn:hover {
-          border-color: #94a3b8;
+          border-color: #cbd5e1;
           background: #f8fafc;
+          transform: translateY(-1px);
         }
         .q-num-btn.active {
           border-color: #4f46e5;
+          background: #eef2ff;
           color: #4f46e5;
           border-width: 2px;
           font-weight: 700;
+          box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.12);
         }
         .q-num-btn.answered {
           background: #4f46e5;
           border-color: #4f46e5;
-          color: #fff;
+          color: #ffffff;
         }
         .q-num-btn.flagged {
-          background: #f5f3ff;
-          border-color: #c084fc;
-          color: #7e22ce;
+          background: #fdf4ff;
+          border-color: #d8b4fe;
+          color: #9333ea;
+        }
+        .q-num-btn.answered.flagged {
+          background: linear-gradient(135deg, #4f46e5 0%, #9333ea 100%);
+          border-color: #9333ea;
+          color: #ffffff;
         }
         .completion-container {
           border-top: 1px solid #f1f5f9;
-          padding-top: 15px;
+          padding-top: 16px;
         }
         .completion-label-row {
           display: flex;
@@ -1986,24 +2503,25 @@ export default function ExamAttempt() {
           font-size: 12px;
           font-weight: 700;
           color: #475569;
-          margin-bottom: 6px;
+          margin-bottom: 8px;
         }
         .completion-bar-bg {
           width: 100%;
-          height: 6px;
+          height: 7px;
           background: #f1f5f9;
-          border-radius: 3px;
+          border-radius: 10px;
           overflow: hidden;
         }
         .completion-bar-fill {
           height: 100%;
-          background: #4f46e5;
-          transition: width 0.3s ease;
+          background: linear-gradient(90deg, #4f46e5 0%, #06b6d4 100%);
+          border-radius: 10px;
+          transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
         .integrity-card-new {
-          background: #f0fdf4;
+          background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
           border: 1px solid #bbf7d0;
-          border-radius: 12px;
+          border-radius: 14px;
           padding: 16px;
           display: flex;
           flex-direction: column;
@@ -2019,84 +2537,123 @@ export default function ExamAttempt() {
         }
         .integrity-subtext {
           font-size: 11px;
-          line-height: 1.4;
+          line-height: 1.45;
           color: #15803d;
         }
         .question-workspace-card {
-          background: #fff;
-          border-radius: 12px;
+          background: #ffffff;
+          border-radius: 16px;
           border: 1px solid #e2e8f0;
-          padding: 30px;
-          box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+          padding: 32px 36px;
+          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.03);
           display: flex;
           flex-direction: column;
-          min-height: 480px;
+          min-height: 520px;
         }
         .workspace-header {
           display: flex;
           justify-content: space-between;
           align-items: center;
-          margin-bottom: 20px;
+          margin-bottom: 22px;
         }
         .question-index-pill {
-          background: #f5f3ff;
-          color: #7e22ce;
+          background: #eef2ff;
+          color: #4338ca;
           font-size: 12px;
           font-weight: 700;
           padding: 6px 14px;
           border-radius: 100px;
-          border: 1px solid #e9d5ff;
+          border: 1px solid #e0e7ff;
+          letter-spacing: 0.3px;
         }
         .flag-review-toggle {
           display: flex;
           align-items: center;
-          gap: 6px;
+          gap: 7px;
           font-size: 13px;
           font-weight: 600;
           color: #64748b;
-          background: none;
-          border: none;
+          background: #f8fafc;
+          border: 1px solid #e2e8f0;
+          border-radius: 8px;
+          padding: 6px 12px;
           cursor: pointer;
-          transition: color 0.2s ease;
+          transition: all 0.2s ease;
         }
         .flag-review-toggle:hover {
           color: #334155;
+          background: #f1f5f9;
         }
         .flag-review-toggle.flagged {
-          color: #7e22ce;
+          background: #fdf4ff;
+          border-color: #d8b4fe;
+          color: #9333ea;
         }
         .question-body-text {
           font-size: 18px;
-          font-weight: 700;
-          line-height: 1.45;
+          font-weight: 650;
+          line-height: 1.55;
           color: #0f172a;
-          margin-bottom: 24px;
+          margin-bottom: 26px;
         }
         .options-stack {
           display: flex;
           flex-direction: column;
-          gap: 12px;
-          margin-bottom: 30px;
+          gap: 13px;
+          margin-bottom: 32px;
           flex: 1;
         }
         .custom-option-card {
           display: flex;
           align-items: center;
-          gap: 14px;
-          background: #fff;
+          gap: 16px;
+          background: #ffffff;
           border: 1.5px solid #e2e8f0;
           border-radius: 12px;
           padding: 16px 20px;
           cursor: pointer;
-          transition: all 0.2s ease;
+          transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
         }
         .custom-option-card:hover {
-          border-color: #cbd5e1;
-          background: #f8fafc;
+          border-color: #a5b4fc;
+          background: #faf5ff;
+          transform: translateY(-1px);
         }
         .custom-option-card.selected {
-          background: #f5f3ff;
-          border-color: #8b5cf6;
+          background: linear-gradient(135deg, #eef2ff 0%, #f5f3ff 100%);
+          border-color: #6366f1;
+          box-shadow: 0 2px 8px rgba(99, 102, 241, 0.12);
+        }
+        .option-letter-badge {
+          width: 32px;
+          height: 32px;
+          border-radius: 8px;
+          background: #f1f5f9;
+          border: 1px solid #e2e8f0;
+          color: #475569;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-weight: 700;
+          font-size: 13px;
+          flex-shrink: 0;
+          transition: all 0.2s ease;
+        }
+        .custom-option-card.selected .option-letter-badge {
+          background: #4f46e5;
+          border-color: #4f46e5;
+          color: #ffffff;
+        }
+        .option-text-display {
+          font-size: 15px;
+          font-weight: 500;
+          color: #334155;
+          flex: 1;
+          line-height: 1.45;
+        }
+        .custom-option-card.selected .option-text-display {
+          color: #0f172a;
+          font-weight: 600;
         }
         .custom-radio-circle {
           width: 20px;
@@ -2110,92 +2667,91 @@ export default function ExamAttempt() {
           transition: all 0.2s ease;
         }
         .custom-option-card.selected .custom-radio-circle {
-          border-color: #8b5cf6;
+          border-color: #4f46e5;
         }
         .custom-radio-inner {
           width: 10px;
           height: 10px;
           border-radius: 50%;
-          background: #8b5cf6;
-        }
-        .option-text-display {
-          font-size: 15px;
-          font-weight: 500;
-          color: #334155;
-        }
-        .custom-option-card.selected .option-text-display {
-          color: #1e1b4b;
-          font-weight: 600;
+          background: #4f46e5;
         }
         .custom-textarea-answer {
           width: 100%;
-          min-height: 150px;
+          min-height: 160px;
           border-radius: 12px;
           border: 1.5px solid #e2e8f0;
-          background: #fff;
+          background: #ffffff;
           font-size: 15px;
-          padding: 14px;
+          padding: 16px;
           box-sizing: border-box;
           resize: vertical;
           transition: all 0.2s ease;
           margin-bottom: 30px;
           flex: 1;
+          font-family: inherit;
         }
         .custom-textarea-answer:focus {
-          border-color: #8b5cf6;
+          border-color: #6366f1;
           outline: none;
-          box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.1);
+          box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
         }
         .navigation-bar-new {
           display: flex;
           justify-content: space-between;
           align-items: center;
-          padding-top: 20px;
+          padding-top: 22px;
           border-top: 1px solid #f1f5f9;
         }
         .nav-text-btn {
           display: flex;
           align-items: center;
           gap: 8px;
-          background: none;
-          border: none;
+          background: #ffffff;
+          border: 1.5px solid #e2e8f0;
+          border-radius: 10px;
           color: #475569;
           font-size: 14px;
           font-weight: 600;
+          padding: 9px 18px;
           cursor: pointer;
-          transition: color 0.2s ease;
+          transition: all 0.2s ease;
         }
-        .nav-text-btn:hover {
-          color: #1e293b;
+        .nav-text-btn:hover:not(:disabled) {
+          border-color: #cbd5e1;
+          background: #f8fafc;
+          color: #0f172a;
         }
         .nav-text-btn:disabled {
           color: #cbd5e1;
+          border-color: #f1f5f9;
           cursor: not-allowed;
+          background: #f8fafc;
         }
         .next-question-btn {
           display: flex;
           align-items: center;
           gap: 8px;
-          background: #4f46e5;
-          color: #fff;
+          background: linear-gradient(135deg, #4f46e5 0%, #4338ca 100%);
+          color: #ffffff;
           border: none;
-          border-radius: 8px;
-          padding: 10px 20px;
+          border-radius: 10px;
+          padding: 10px 22px;
           font-weight: 600;
           font-size: 14px;
           cursor: pointer;
-          transition: all 0.2s ease;
-          box-shadow: 0 2px 4px rgba(79, 70, 229, 0.15);
+          transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+          box-shadow: 0 2px 6px rgba(79, 70, 229, 0.25);
         }
         .next-question-btn:hover {
-          background: #4338ca;
-          box-shadow: 0 4px 8px rgba(79, 70, 229, 0.25);
+          background: linear-gradient(135deg, #4338ca 0%, #3730a3 100%);
+          box-shadow: 0 4px 12px rgba(79, 70, 229, 0.35);
+          transform: translateY(-1px);
         }
         .tool-box-inner {
           background: #f8fafc;
           border: 1px solid #e2e8f0;
-          border-radius: 8px;
-          padding: 12px;
+          border-radius: 10px;
+          padding: 14px;
           margin-bottom: 16px;
         }
         .tool-box-inner:last-child {
@@ -2208,30 +2764,31 @@ export default function ExamAttempt() {
           margin-bottom: 8px;
         }
         .tool-formula {
-          font-family: monospace;
-          font-size: 11px;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+          font-size: 12px;
           color: #2563eb;
           background: #eff6ff;
-          padding: 8px 12px;
-          border-radius: 6px;
+          padding: 10px 14px;
+          border-radius: 8px;
           border: 1px solid #dbeafe;
           overflow-x: auto;
           white-space: nowrap;
         }
         .scratchpad-area {
           width: 100%;
-          height: 90px;
-          border: 1px solid #cbd5e1;
-          border-radius: 6px;
-          background: #fff;
-          padding: 8px;
+          height: 100px;
+          border: 1px solid #e2e8f0;
+          border-radius: 8px;
+          background: #ffffff;
+          padding: 10px;
           font-size: 12px;
           box-sizing: border-box;
-          resize: none;
+          resize: vertical;
           font-family: inherit;
+          color: #334155;
         }
         .scratchpad-area:focus {
-          border-color: #8b5cf6;
+          border-color: #6366f1;
           outline: none;
         }
         .stats-list-new {
@@ -2258,11 +2815,15 @@ export default function ExamAttempt() {
           border-radius: 50%;
         }
         .stat-dot.red { background: #ef4444; }
-        .stat-dot.purple { background: #a855f7; }
-        .stat-dot.blue { background: #3b82f6; }
+        .stat-dot.purple { background: #9333ea; }
+        .stat-dot.blue { background: #4f46e5; }
         .stat-count-value {
           font-weight: 700;
-          color: #1e293b;
+          color: #0f172a;
+          background: #f1f5f9;
+          padding: 2px 8px;
+          border-radius: 6px;
+          font-size: 12px;
         }
         .proctoring-alerts {
           position: fixed;
@@ -2274,13 +2835,13 @@ export default function ExamAttempt() {
         .alert {
           padding: 12px 16px;
           margin-bottom: 10px;
-          border-radius: 8px;
+          border-radius: 10px;
           display: flex;
           align-items: center;
-          background: #fff3cd;
-          color: #856404;
-          box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-          border: 1px solid #ffeeba;
+          background: #fffbeb;
+          color: #92400e;
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+          border: 1px solid #fef3c7;
           font-size: 13px;
         }
         .alert svg {
@@ -2292,7 +2853,7 @@ export default function ExamAttempt() {
           margin-left: auto;
           font-size: 11px;
         }
-        @media (max-width: 992px) {
+        @media (max-width: 1080px) {
           .exam-grid-new {
             grid-template-columns: 1fr;
             padding: 16px;
@@ -2303,17 +2864,47 @@ export default function ExamAttempt() {
       {/* Floating status indicator for real-time proctor server connection */}
       <StatusIndicator />
 
-      {/* Header bar */}
+      {/* Header bar with consistent Examlytic | SECURE PORTAL logo */}
       <header className="exam-header-new">
         <div className="header-brand">
-          <span className="brand-name">Examlytic</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 700, fontSize: '1.15rem' }}>
+            <span style={{ color: '#059669', letterSpacing: '0.03em', fontWeight: 800 }}>Examlytic</span>
+            <span style={{ color: '#D1D5DB', fontWeight: 300 }}>|</span>
+            <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#4B5563', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+              SECURE PORTAL
+            </span>
+          </div>
           <div className="brand-divider" />
-          <span className="exam-title-display">
-            {exam ? `${exam.title} - ${exam.subject || 'MIDTERM'}` : 'EXAM WORKSPACE'}
-          </span>
+          <div className="exam-meta-wrap">
+            <span className="exam-title-display">
+              {exam?.title || 'Assessment Workspace'}
+            </span>
+            {exam?.subject && <span className="exam-subject-badge">{exam.subject}</span>}
+          </div>
         </div>
         <div className="header-controls">
-          <div className="timer-pill">
+          <button
+            type="button"
+            onClick={requestFullscreenLock}
+            title={isFullscreenLocked ? 'Browser Lock Active (Fullscreen)' : 'Click to Activate Browser Lock (Fullscreen)'}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '7px 12px',
+              borderRadius: '8px',
+              fontSize: '12px',
+              fontWeight: 700,
+              cursor: isFullscreenLocked ? 'default' : 'pointer',
+              border: isFullscreenLocked ? '1px solid #a7f3d0' : '1px solid #fde68a',
+              backgroundColor: isFullscreenLocked ? '#ecfdf5' : '#fffbeb',
+              color: isFullscreenLocked ? '#047857' : '#b45309'
+            }}
+          >
+            <FaLock size={12} />
+            <span>{isFullscreenLocked ? 'Browser Locked' : 'Activate Lock'}</span>
+          </button>
+          <div className={`timer-pill ${timeLeft < 60 ? 'timer-critical' : timeLeft < 300 ? 'timer-warning' : ''}`}>
             <span>⏱️</span>
             <span>{hours !== '00' ? `${hours}:${minutes}:${seconds}` : `${minutes}:${seconds}`}</span>
           </div>
@@ -2321,11 +2912,48 @@ export default function ExamAttempt() {
             onClick={handleSubmit} 
             disabled={isSubmitting} 
             className="finish-exam-btn"
+            style={{ background: 'linear-gradient(135deg, #059669 0%, #047857 100%)', boxShadow: '0 2px 6px rgba(5, 150, 105, 0.25)' }}
           >
             Finish Exam
           </button>
         </div>
       </header>
+
+      {!isFullscreenLocked && (
+        <div style={{
+          backgroundColor: '#FFFBEB',
+          borderBottom: '1px solid #FDE68A',
+          padding: '10px 36px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '12px',
+          fontSize: '13px',
+          color: '#92400E'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600 }}>
+            <FaExclamationTriangle style={{ color: '#D97706' }} />
+            <span>Browser Lock (Fullscreen) is required. Note: Pressing the browser Back button will automatically submit your exam.</span>
+          </div>
+          <button
+            type="button"
+            onClick={requestFullscreenLock}
+            style={{
+              backgroundColor: '#D97706',
+              color: '#FFFFFF',
+              border: 'none',
+              borderRadius: '8px',
+              padding: '6px 14px',
+              fontSize: '12px',
+              fontWeight: 700,
+              cursor: 'pointer',
+              flexShrink: 0
+            }}
+          >
+            Enter Fullscreen Lock
+          </button>
+        </div>
+      )}
 
       {/* Three Column Grid Workspace */}
       <main className="exam-grid-new">
@@ -2335,6 +2963,10 @@ export default function ExamAttempt() {
           <div className="webcam-card-new">
             <video ref={videoRef} autoPlay muted playsInline className="webcam-video" />
             <canvas ref={canvasRef} className="webcam-canvas" />
+            <div className="webcam-live-badge">
+              <span className="pulse-dot" />
+              <span>LIVE PROCTOR FEED</span>
+            </div>
             <div className="webcam-timestamp">
               {formatDateTime(currentDateTime)}
             </div>
@@ -2343,7 +2975,10 @@ export default function ExamAttempt() {
           {/* Exam Progress Card */}
           <div className="sidebar-card">
             <div className="sidebar-card-title">
-              Exam Progress
+              <span>Question Palette</span>
+              <span className="palette-stats-badge">
+                {questions.filter(q => answers[q.id]).length}/{questions.length} Answered
+              </span>
             </div>
             <div className="question-grid-new">
               {questions.map((q, idx) => {
@@ -2369,7 +3004,7 @@ export default function ExamAttempt() {
             </div>
             <div className="completion-container">
               <div className="completion-label-row">
-                <span>Completion</span>
+                <span>Overall Completion</span>
                 <span>
                   {questions.length > 0 
                     ? Math.round((questions.filter(q => answers[q.id]).length / questions.length) * 100) 
@@ -2392,11 +3027,11 @@ export default function ExamAttempt() {
           {/* Integrity Shield Card */}
           <div className="integrity-card-new">
             <div className="integrity-header">
-              <FaLock />
-              <span>Integrity Shield Active</span>
+              <FaShieldAlt />
+              <span>Integrity Shield &amp; Lock Active</span>
             </div>
             <div className="integrity-subtext">
-              Your session is being monitored for professional certification compliance.
+              Real-time video, screen, and browser session monitoring are enabled. <strong>Do not press the browser Back button or navigate away</strong> — doing so will automatically submit your exam.
             </div>
           </div>
         </section>
@@ -2405,7 +3040,7 @@ export default function ExamAttempt() {
         <section className="question-workspace-card">
           <div className="workspace-header">
             <div className="question-index-pill">
-              Question {currentQuestionIndex + 1} of {questions.length}
+              QUESTION {currentQuestionIndex + 1} OF {questions.length}
             </div>
             <button 
               className={`flag-review-toggle ${flaggedQuestions[currentQuestion.id] ? 'flagged' : ''}`}
@@ -2415,7 +3050,7 @@ export default function ExamAttempt() {
               }))}
             >
               {flaggedQuestions[currentQuestion.id] ? <FaFlag /> : <FaRegFlag />}
-              <span>Flag for review</span>
+              <span>{flaggedQuestions[currentQuestion.id] ? 'Flagged for Review' : 'Flag for Review'}</span>
             </button>
           </div>
 
@@ -2443,10 +3078,11 @@ export default function ExamAttempt() {
                     className={`custom-option-card ${selected ? 'selected' : ''}`}
                     onClick={() => handleOptionChange(currentQuestion.id, letter)}
                   >
+                    <div className="option-letter-badge">{letter}</div>
+                    <span className="option-text-display">{opt}</span>
                     <div className="custom-radio-circle">
                       {selected && <div className="custom-radio-inner" />}
                     </div>
-                    <span className="option-text-display">{opt}</span>
                   </div>
                 );
               })}
@@ -2454,7 +3090,7 @@ export default function ExamAttempt() {
           ) : (
             <textarea
               className="custom-textarea-answer"
-              placeholder="Type your notes or answer details here..."
+              placeholder="Type your notes or response details here..."
               value={answers[currentQuestion.id] || ''}
               onChange={e => handleOptionChange(currentQuestion.id, e.target.value)}
             />
@@ -2479,7 +3115,7 @@ export default function ExamAttempt() {
               }))}
             >
               <FaRegFlag />
-              <span>Review Later</span>
+              <span>{flaggedQuestions[currentQuestion.id] ? 'Unflag Question' : 'Review Later'}</span>
             </button>
 
             <button 
@@ -2494,44 +3130,161 @@ export default function ExamAttempt() {
 
         {/* Right Column */}
         <section className="sidebar-column">
-          {/* Reference Tools Card */}
+          {/* Reference Tools Card (Scratchpad & Diagram Sketchpad) */}
           <div className="sidebar-card">
             <div className="sidebar-card-title">
-              <FaCalculator />
-              <span>Reference Tools</span>
-            </div>
-            
-            <div className="tool-box-inner">
-              <div className="tool-box-title">Equation Helper</div>
-              <div className="tool-formula">
-                ∂L/∂w = (∂L/∂y) * (∂y/∂z) * (∂z/∂w)
-              </div>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <FaCalculator />
+                <span>Reference Tools</span>
+              </span>
             </div>
 
-            <div className="tool-box-inner">
-              <div className="tool-box-title">Scratchpad</div>
-              <textarea 
-                className="scratchpad-area"
-                placeholder="Type your notes here..."
-                value={notes}
-                onChange={e => setNotes(e.target.value)}
-              />
+            {/* Switcher between Text Scratchpad and Diagram Sketchpad */}
+            <div style={{ display: 'flex', gap: '6px', marginBottom: '12px' }}>
+              <button
+                type="button"
+                onClick={() => setReferenceTab('notes')}
+                style={{
+                  flex: 1,
+                  padding: '6px 10px',
+                  borderRadius: '8px',
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  border: referenceTab === 'notes' ? '1.5px solid #059669' : '1px solid #E2E8F0',
+                  backgroundColor: referenceTab === 'notes' ? '#ECFDF5' : '#F8FAFC',
+                  color: referenceTab === 'notes' ? '#047857' : '#475569'
+                }}
+              >
+                Scratchpad
+              </button>
+              <button
+                type="button"
+                onClick={() => setReferenceTab('diagram')}
+                style={{
+                  flex: 1,
+                  padding: '6px 10px',
+                  borderRadius: '8px',
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '5px',
+                  border: referenceTab === 'diagram' ? '1.5px solid #059669' : '1px solid #E2E8F0',
+                  backgroundColor: referenceTab === 'diagram' ? '#ECFDF5' : '#F8FAFC',
+                  color: referenceTab === 'diagram' ? '#047857' : '#475569'
+                }}
+              >
+                <FaPencilAlt size={10} />
+                <span>Diagram Pad</span>
+              </button>
             </div>
+
+            {referenceTab === 'notes' ? (
+              <div className="tool-box-inner">
+                <div className="tool-box-title">Quick Notes</div>
+                <textarea 
+                  className="scratchpad-area"
+                  style={{ height: '140px' }}
+                  placeholder="Type your scratch work, formulas, or notes here..."
+                  value={notes}
+                  onChange={e => setNotes(e.target.value)}
+                />
+              </div>
+            ) : (
+              <div className="tool-box-inner">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    {['#059669', '#1D4ED8', '#DC2626', '#111827'].map((col) => (
+                      <button
+                        type="button"
+                        key={col}
+                        onClick={() => { setDiagramColor(col); setIsEraser(false); }}
+                        style={{
+                          width: '16px',
+                          height: '16px',
+                          borderRadius: '50%',
+                          backgroundColor: col,
+                          border: !isEraser && diagramColor === col ? '2px solid #0f172a' : '1px solid #cbd5e1',
+                          cursor: 'pointer',
+                          padding: 0
+                        }}
+                        title="Pen color"
+                      />
+                    ))}
+                  </div>
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <button
+                      type="button"
+                      onClick={() => setIsEraser(!isEraser)}
+                      title="Toggle Eraser"
+                      style={{
+                        border: isEraser ? '1px solid #059669' : '1px solid #CBD5E1',
+                        backgroundColor: isEraser ? '#ECFDF5' : '#FFFFFF',
+                        color: isEraser ? '#059669' : '#475569',
+                        borderRadius: '6px',
+                        padding: '3px 7px',
+                        fontSize: '11px',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <FaEraser size={10} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={clearDiagramCanvas}
+                      title="Clear Diagram"
+                      style={{
+                        border: '1px solid #FECACA',
+                        backgroundColor: '#FEF2F2',
+                        color: '#DC2626',
+                        borderRadius: '6px',
+                        padding: '3px 7px',
+                        fontSize: '11px',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <FaTrash size={10} />
+                    </button>
+                  </div>
+                </div>
+                <canvas
+                  ref={diagramCanvasRef}
+                  width={240}
+                  height={160}
+                  onMouseDown={startDiagramDraw}
+                  onMouseMove={drawDiagramMove}
+                  onMouseUp={stopDiagramDraw}
+                  onMouseLeave={stopDiagramDraw}
+                  style={{
+                    width: '100%',
+                    height: '150px',
+                    backgroundColor: '#FFFFFF',
+                    border: '1px solid #CBD5E1',
+                    borderRadius: '8px',
+                    cursor: isEraser ? 'cell' : 'crosshair',
+                    display: 'block'
+                  }}
+                />
+              </div>
+            )}
           </div>
 
           {/* Quick Navigation Card */}
           <div className="sidebar-card">
             <div className="sidebar-card-title">
-              Quick Navigation
+              <span>Exam Summary</span>
             </div>
             <div className="stats-list-new">
               <div className="stat-row-new">
                 <div className="stat-label-with-dot">
-                  <div className="stat-dot red" />
-                  <span>Unanswered</span>
+                  <div className="stat-dot blue" />
+                  <span>Attempted</span>
                 </div>
                 <span className="stat-count-value">
-                  {questions.filter(q => !answers[q.id]).length}
+                  {questions.filter(q => answers[q.id]).length}
                 </span>
               </div>
               <div className="stat-row-new">
@@ -2545,11 +3298,11 @@ export default function ExamAttempt() {
               </div>
               <div className="stat-row-new">
                 <div className="stat-label-with-dot">
-                  <div className="stat-dot blue" />
-                  <span>Attempted</span>
+                  <div className="stat-dot red" />
+                  <span>Unanswered</span>
                 </div>
                 <span className="stat-count-value">
-                  {questions.filter(q => answers[q.id]).length}
+                  {questions.filter(q => !answers[q.id]).length}
                 </span>
               </div>
             </div>

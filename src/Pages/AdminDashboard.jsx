@@ -13,6 +13,7 @@ import { jsPDF } from "jspdf"
 import "../AdminDashboard.css"
 import { generateExamQuestions } from "../utils/groqService"
 import LiveMonitoring from "../Components/LiveMonitoring"
+import StudentSessionTimeline from "../Components/StudentSessionTimeline"
 import { useExamActivity } from "../context/ExamActivityProvider"
 import { serializeExamConfig } from "../utils/examConfig"
 
@@ -225,10 +226,13 @@ export default function AdminDashboard() {
   const [users, setUsers] = useState([]);
   const [userAttempts, setUserAttempts] = useState([]);
   const [activeAttempts, setActiveAttempts] = useState([]);
+  const [interruptedAttempts, setInterruptedAttempts] = useState([]);
+  const [expiredAttempts, setExpiredAttempts] = useState([]);
+  const [monitorFilter, setMonitorFilter] = useState('all'); // 'all', 'active', 'interrupted', 'expired'
   const [searchQuery, setSearchQuery] = useState('');
   const [studentSearchQuery, setStudentSearchQuery] = useState('');
   
-  const [loading, setLoading] = useState(true);
+  const [_loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [initialLoad, setInitialLoad] = useState(true);
   
@@ -240,7 +244,7 @@ export default function AdminDashboard() {
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [currentExam, setCurrentExam] = useState(null);
   const [copied, setCopied] = useState(false);
-  const [loadingStates, setLoadingStates] = useState({});
+  const [_loadingStates, setLoadingStates] = useState({});
   const [recentFlags, setRecentFlags] = useState([]);
   const [selectedAttemptLogs, setSelectedAttemptLogs] = useState([]);
   const [isProfileDropdownOpen, setIsProfileDropdownOpen] = useState(false);
@@ -625,14 +629,82 @@ FACE_NOT_FOUND: 0,
       });
       setUserAttempts(attemptsWithUser);
 
-      // 4. Split active vs completed attempts
-      const active = attemptsWithUser.filter(a => a.submitted_at === null);
-      const completed = attemptsWithUser.filter(a => a.submitted_at !== null);
+      // 4. Categorize attempts based on lifecycle, deadline, and heartbeat
+      const nowTime = Date.now();
+      const activeList = [];
+      const interruptedList = [];
+      const expiredList = [];
+      const completedList = [];
 
-      // 5. Fetch flags only for currently ACTIVE exams (bounded query, never
-      //    the whole exam_flags table).
-      let activeWithLogs = active.map(a => ({ ...a, flagsCount: 0, latestFlag: null }));
-      const activeExamIds = [...new Set(active.map(a => a.exam_id).filter(Boolean))];
+      // Pre-calculate set of (student_id + '_' + exam_id) that are already completed or submitted
+      const completedStudentExamKeys = new Set();
+      attemptsWithUser.forEach(a => {
+        const isDone = Boolean(a.submitted_at) || 
+          Boolean(a.completed_at) || 
+          a.status === 'completed' || 
+          a.status === 'submitted';
+        if (isDone && a.student_id && a.exam_id) {
+          completedStudentExamKeys.add(`${a.student_id}_${a.exam_id}`);
+        }
+      });
+
+      attemptsWithUser.forEach(attempt => {
+        const isDirectlyCompleted = Boolean(attempt.submitted_at) || 
+          Boolean(attempt.completed_at) || 
+          attempt.status === 'completed' || 
+          attempt.status === 'submitted';
+
+        if (isDirectlyCompleted) {
+          completedList.push(attempt);
+          return;
+        }
+
+        // If the attempt is abandoned, cancelled, or archived, do not show in active or interrupted monitoring
+        if (attempt.status === 'abandoned' || attempt.status === 'cancelled' || attempt.status === 'archived') {
+          return;
+        }
+
+        // If this student already has a submitted/completed attempt for this exam,
+        // do not categorize older/stale unsubmitted attempts as interrupted or active
+        const pairKey = `${attempt.student_id}_${attempt.exam_id}`;
+        if (completedStudentExamKeys.has(pairKey)) {
+          return;
+        }
+
+        const startTime = new Date(attempt.started_at || attempt.created_at).getTime();
+        const durationMin = Number(attempt.duration_minutes) || (examsWithCounts.find(e => e.id === attempt.exam_id)?.duration_minutes) || 90;
+        const durationMs = durationMin * 60 * 1000;
+        const expiresAt = startTime + durationMs;
+
+        if (nowTime > expiresAt || attempt.status === 'expired') {
+          expiredList.push({ ...attempt, isExpired: true, remainingSeconds: 0 });
+          return;
+        }
+
+        const lastHeartbeat = attempt.last_heartbeat_at ? new Date(attempt.last_heartbeat_at).getTime() : startTime;
+        const secondsSinceHeartbeat = Math.max(0, Math.floor((nowTime - lastHeartbeat) / 1000));
+        const remainingSeconds = Math.max(0, Math.floor((expiresAt - nowTime) / 1000));
+
+        const enriched = {
+          ...attempt,
+          remainingSeconds,
+          secondsSinceHeartbeat,
+          isInterrupted: secondsSinceHeartbeat > 45 || attempt.status === 'interrupted'
+        };
+
+        if (enriched.isInterrupted) {
+          interruptedList.push(enriched);
+        } else {
+          activeList.push(enriched);
+        }
+      });
+
+      setInterruptedAttempts(interruptedList);
+      setExpiredAttempts(expiredList);
+
+      // 5. Fetch flags only for currently ACTIVE exams (bounded query)
+      let activeWithLogs = activeList.map(a => ({ ...a, flagsCount: 0, latestFlag: null }));
+      const activeExamIds = [...new Set(activeList.map(a => a.exam_id).filter(Boolean))];
       let activeFlags = [];
       if (activeExamIds.length) {
         const { data: activeFlagsData, error: activeFlagsError } = await supabase
@@ -642,7 +714,7 @@ FACE_NOT_FOUND: 0,
           .order('timestamp', { ascending: false });
         if (!activeFlagsError && activeFlagsData) activeFlags = activeFlagsData;
       }
-      activeWithLogs = active.map(a => {
+      activeWithLogs = activeList.map(a => {
         const studentFlags = activeFlags.filter(flag => flag.exam_id === a.exam_id && flag.user_id === a.student_id);
         return {
           ...a,
@@ -723,15 +795,17 @@ FACE_NOT_FOUND: 0,
       countersBaselineReadyRef.current = true;
 
       // 6. Compute stats
-      const totalCompleted = completed.length;
-      const totalActive = active.length;
-      const totalSessions = totalCompleted + totalActive;
+      const totalCompleted = completedList.length;
+      const totalActive = activeList.length;
+      const totalInterrupted = interruptedList.length;
+      const totalExpired = expiredList.length;
+      const totalSessions = totalCompleted + totalActive + totalInterrupted + totalExpired;
       const completionRate = totalSessions > 0 
         ? ((totalCompleted / totalSessions) * 100).toFixed(1) 
         : "0.0";
       
       const avgScore = totalCompleted > 0 
-        ? (completed.reduce((acc, curr) => acc + (Number(curr.score) || 0), 0) / totalCompleted).toFixed(1)
+        ? (completedList.reduce((acc, curr) => acc + (Number(curr.score) || 0), 0) / totalCompleted).toFixed(1)
         : "0.0";
 
       const totalAlerts = activeWithLogs.reduce((acc, curr) => acc + curr.flagsCount, 0);
@@ -739,6 +813,8 @@ FACE_NOT_FOUND: 0,
 
       setStats({
         activeExaminees: totalActive,
+        interruptedSessions: totalInterrupted,
+        expiredSessions: totalExpired,
         completionRate: `${completionRate}%`,
         proctoringFlag,
         proctoringAlerts: `${totalAlerts} Alerts`,
@@ -765,8 +841,37 @@ FACE_NOT_FOUND: 0,
 
   useEffect(() => {
     loadDashboardDataRef.current();
+    // 60-second reconciliation fallback
     const interval = setInterval(() => loadDashboardDataRef.current(), 60000);
-    return () => clearInterval(interval);
+
+    // Debounced Supabase Realtime channel for instant attempt and flag updates
+    let refreshTimer = null;
+    const scheduleRefresh = () => {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => {
+        loadDashboardDataRef.current();
+      }, 1500);
+    };
+
+    const channel = supabase
+      .channel('admin-dashboard-changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'exam_attempts' },
+        scheduleRefresh
+      )
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'exam_flags' },
+        scheduleRefresh
+      )
+      .subscribe();
+
+    return () => {
+      clearInterval(interval);
+      if (refreshTimer) clearTimeout(refreshTimer);
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   useEffect(() => {
@@ -794,12 +899,35 @@ FACE_NOT_FOUND: 0,
         return;
       }
       
-      // Fetch logs
-      const { data: logsData, error: logsError } = await supabase
+      // Fetch logs associated with this attempt
+      let { data: logsData, error: logsError } = await supabase
         .from('exam_logs')
         .select('*')
         .eq('exam_attempt_id', selectedAttempt.id)
-        .order('created_at', { ascending: true });
+        .order('timestamp', { ascending: true });
+
+      // Deterministic fallback for legacy logs without exam_attempt_id
+      if ((!logsData || logsData.length === 0) && selectedAttempt.student_id) {
+        const { data: legacyLogs } = await supabase
+          .from('exam_logs')
+          .select('*')
+          .eq('student_id', selectedAttempt.student_id)
+          .order('timestamp', { ascending: true });
+
+        if (legacyLogs && legacyLogs.length > 0) {
+          const attemptStart = new Date(selectedAttempt.started_at || selectedAttempt.created_at).getTime();
+          const attemptEnd = selectedAttempt.submitted_at || selectedAttempt.completed_at
+            ? new Date(selectedAttempt.submitted_at || selectedAttempt.completed_at).getTime()
+            : attemptStart + (Number(selectedAttempt.duration_minutes) || 90) * 60 * 1000;
+
+          logsData = legacyLogs.filter(l => {
+            const logExamId = l.event_details?.exam_id;
+            if (logExamId && logExamId === selectedAttempt.exam_id) return true;
+            const logTime = new Date(l.timestamp || l.created_at).getTime();
+            return logTime >= attemptStart - 60000 && logTime <= attemptEnd + 60000;
+          });
+        }
+      }
         
       // Fetch flags
       const { data: flagsData, error: flagsError } = await supabase
@@ -880,7 +1008,7 @@ FACE_NOT_FOUND: 0,
     }
   };
 
-  const openShareModal = (exam) => {
+  const _openShareModal = (exam) => {
     setCurrentExam(exam);
     setShareModalOpen(true);
   };
@@ -918,6 +1046,24 @@ FACE_NOT_FOUND: 0,
     String(attempt.user_name || '').toLowerCase().includes(String(searchQuery || '').toLowerCase()) ||
     String(attempt.user_email || '').toLowerCase().includes(String(searchQuery || '').toLowerCase())
   );
+
+  const filteredInterruptedAttempts = interruptedAttempts.filter(attempt => 
+    String(attempt.user_name || '').toLowerCase().includes(String(searchQuery || '').toLowerCase()) ||
+    String(attempt.user_email || '').toLowerCase().includes(String(searchQuery || '').toLowerCase())
+  );
+
+  const filteredExpiredAttempts = expiredAttempts.filter(attempt => 
+    String(attempt.user_name || '').toLowerCase().includes(String(searchQuery || '').toLowerCase()) ||
+    String(attempt.user_email || '').toLowerCase().includes(String(searchQuery || '').toLowerCase())
+  );
+
+  const displayAttempts = monitorFilter === 'active'
+    ? filteredActiveAttempts
+    : monitorFilter === 'interrupted'
+    ? filteredInterruptedAttempts
+    : monitorFilter === 'expired'
+    ? filteredExpiredAttempts
+    : [...filteredActiveAttempts, ...filteredInterruptedAttempts];
 
   // ----- Issue #4: live activity integration (hooks run before any return) -----
 
@@ -1195,29 +1341,61 @@ FACE_NOT_FOUND: 0,
                 <div className="live-monitor-header">
                   <div className="live-monitor-title">
                     <h2>Live Monitor</h2>
-                    <p>Real-time AI behavioral analysis and webcam streams.</p>
+                    <p>Real-time AI behavioral analysis, connection health, and webcam streams.</p>
                   </div>
-                  <div className="live-monitor-actions">
-                    <button className="btn-monitor-action"><FaThLarge /> Filter Feed</button>
-                    <button className="btn-monitor-action"><FaList /> Layout</button>
+                  <div className="live-monitor-actions" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <button 
+                      className={`btn-monitor-action ${monitorFilter === 'all' ? 'active' : ''}`}
+                      style={{ backgroundColor: monitorFilter === 'all' ? '#2b7cff' : '#F3F4F6', color: monitorFilter === 'all' ? '#ffffff' : '#374151', padding: '6px 14px', borderRadius: '8px', border: 'none', cursor: 'pointer', fontWeight: 600, fontSize: '0.8rem' }}
+                      onClick={() => setMonitorFilter('all')}
+                    >
+                      All ({filteredActiveAttempts.length + filteredInterruptedAttempts.length})
+                    </button>
+                    <button 
+                      className={`btn-monitor-action ${monitorFilter === 'active' ? 'active' : ''}`}
+                      style={{ backgroundColor: monitorFilter === 'active' ? '#059669' : '#F3F4F6', color: monitorFilter === 'active' ? '#ffffff' : '#374151', padding: '6px 14px', borderRadius: '8px', border: 'none', cursor: 'pointer', fontWeight: 600, fontSize: '0.8rem' }}
+                      onClick={() => setMonitorFilter('active')}
+                    >
+                      Active ({filteredActiveAttempts.length})
+                    </button>
+                    <button 
+                      className={`btn-monitor-action ${monitorFilter === 'interrupted' ? 'active' : ''}`}
+                      style={{ backgroundColor: monitorFilter === 'interrupted' ? '#DC2626' : '#F3F4F6', color: monitorFilter === 'interrupted' ? '#ffffff' : '#374151', padding: '6px 14px', borderRadius: '8px', border: 'none', cursor: 'pointer', fontWeight: 600, fontSize: '0.8rem' }}
+                      onClick={() => setMonitorFilter('interrupted')}
+                    >
+                      Interrupted ({filteredInterruptedAttempts.length})
+                    </button>
+                    <button 
+                      className={`btn-monitor-action ${monitorFilter === 'expired' ? 'active' : ''}`}
+                      style={{ backgroundColor: monitorFilter === 'expired' ? '#6B7280' : '#F3F4F6', color: monitorFilter === 'expired' ? '#ffffff' : '#374151', padding: '6px 14px', borderRadius: '8px', border: 'none', cursor: 'pointer', fontWeight: 600, fontSize: '0.8rem' }}
+                      onClick={() => setMonitorFilter('expired')}
+                    >
+                      Expired ({filteredExpiredAttempts.length})
+                    </button>
                   </div>
                 </div>
 
                 <div className="live-monitor-grid">
-                  {filteredActiveAttempts.length === 0 ? (
+                  {displayAttempts.length === 0 ? (
                     <div style={{ gridColumn: '1 / -1', padding: '40px', backgroundColor: '#ffffff', borderRadius: '12px', border: '1px solid #E2E8F0', textAlign: 'center', color: '#6B7280' }}>
                       <FaVideo size={48} style={{ color: '#9CA3AF', marginBottom: '12px', display: 'block', margin: '0 auto 12px' }} />
-                      <h4 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800, color: '#111827' }}>No Active Proctored Sessions</h4>
-                      <p style={{ margin: '4px 0 0 0', fontSize: '0.85rem' }}>Examinees currently taking tests will appear here in real-time.</p>
+                      <h4 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800, color: '#111827' }}>
+                        {monitorFilter === 'interrupted' ? 'No Interrupted Sessions' : monitorFilter === 'expired' ? 'No Expired Sessions' : 'No Active Proctored Sessions'}
+                      </h4>
+                      <p style={{ margin: '4px 0 0 0', fontSize: '0.85rem' }}>
+                        {monitorFilter === 'interrupted' ? 'All active examinees have healthy heartbeats.' : 'Examinees currently taking tests will appear here in real-time.'}
+                      </p>
                     </div>
                   ) : (
-                    filteredActiveAttempts.map((attempt) => {
-                      const hasFlags = attempt.flagsCount > 0;
-                      let badgeType = 'green';
-                      let statusText = 'CLEAR';
-                      let descText = 'Secure & Active';
+                    displayAttempts.map((attempt) => {
+                      const hasFlags = (attempt.flagsCount || 0) > 0;
+                      let badgeType = attempt.isInterrupted ? 'red' : (attempt.isExpired ? 'gray' : 'green');
+                      let statusText = attempt.isInterrupted ? 'INTERRUPTED' : (attempt.isExpired ? 'EXPIRED' : 'ACTIVE');
+                      let descText = attempt.isInterrupted 
+                        ? `Heartbeat lost (${attempt.secondsSinceHeartbeat}s ago)`
+                        : (attempt.isExpired ? 'Exam time window expired' : 'Secure & Active');
                       
-                      if (hasFlags && attempt.latestFlag) {
+                      if (!attempt.isInterrupted && !attempt.isExpired && hasFlags && attempt.latestFlag) {
                         const flagType = attempt.latestFlag.flag_type;
                         if (['MULTIPLE_FACES_DETECTED', 'NO_FACE_DETECTED'].includes(flagType)) {
                           badgeType = 'red';
@@ -1229,26 +1407,45 @@ FACE_NOT_FOUND: 0,
                           descText = `Behavioral anomaly: ${flagType.replace(/_/g, ' ')}`;
                         }
                       }
+
+                      // Stream health tag
+                      const streamStatus = attempt.stream_status || (attempt.isInterrupted ? 'STREAM_DISCONNECTED' : 'STREAM_CONNECTED');
+                      const streamTagColor = streamStatus === 'STREAM_CONNECTED' ? '#059669' : (streamStatus === 'STREAM_RECONNECTING' ? '#D97706' : '#DC2626');
+
+                      // Format remaining time
+                      const remMin = Math.floor((attempt.remainingSeconds || 0) / 60);
+                      const remSec = (attempt.remainingSeconds || 0) % 60;
+                      const timeStr = attempt.isExpired ? 'Expired' : `${remMin}m ${remSec < 10 ? '0' : ''}${remSec}s left`;
                       
                       return (
-                        <div key={attempt.id} className="live-monitor-card" style={{ cursor: 'pointer' }} onClick={() => {
+                        <div key={attempt.id} className="live-monitor-card" style={{ cursor: 'pointer', border: attempt.isInterrupted ? '2px solid #FCA5A5' : '1px solid #E2E8F0' }} onClick={() => {
                           setActiveLiveMonitorExamId(attempt.exam_id);
                           setActiveLiveMonitorTitle(attempt.exam_title || 'Live Stream');
                         }}>
                           <div className="live-monitor-video-box">
                             <div className="disconnected-placeholder" style={{ backgroundColor: '#111827' }}>
                               <FaVideo size={32} />
-                              <span style={{ fontSize: '0.75rem', marginTop: '8px' }}>LIVE FEED ACTIVE</span>
+                              <span style={{ fontSize: '0.75rem', marginTop: '8px' }}>
+                                {attempt.isInterrupted ? 'STREAM RECONNECTING' : 'LIVE FEED ACTIVE'}
+                              </span>
                             </div>
                             <span className={`live-monitor-overlay-badge badge-${badgeType}`}>
                               {badgeType === 'red' && <FaExclamationTriangle size={10} />}
                               {statusText}
                             </span>
+                            <div style={{ position: 'absolute', bottom: '8px', left: '8px', right: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <span style={{ backgroundColor: 'rgba(0,0,0,0.7)', color: '#fff', fontSize: '0.7rem', padding: '2px 6px', borderRadius: '4px', fontWeight: 600 }}>
+                                ⏱️ {timeStr}
+                              </span>
+                              <span style={{ backgroundColor: 'rgba(0,0,0,0.7)', color: streamTagColor, fontSize: '0.65rem', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>
+                                ● {streamStatus.replace(/_/g, ' ')}
+                              </span>
+                            </div>
                           </div>
                           <div className="live-monitor-card-details">
                             <div className="live-monitor-info-row">
                               <span className="live-monitor-name">{attempt.user_name}</span>
-                              <span className="live-monitor-tab-tag">ID: {attempt.student_id.slice(0,6).toUpperCase()}</span>
+                              <span className="live-monitor-tab-tag">ID: {attempt.student_id ? attempt.student_id.slice(0,6).toUpperCase() : 'N/A'}</span>
                             </div>
                             <span className={`live-monitor-alert-desc alert-desc-${badgeType}`}>
                               {badgeType === 'red' && <span style={{ marginRight: '4px' }}>⚠️</span>}
@@ -1429,7 +1626,6 @@ FACE_NOT_FOUND: 0,
                     </thead>
                     <tbody>
                       {filteredExams.map(exam => {
-                        const count = userAttempts.filter(a => a.exam_id === exam.id).length;
                         return (
                           <tr key={exam.id}>
                             <td>
@@ -1682,34 +1878,12 @@ FACE_NOT_FOUND: 0,
                     })()}
                   </div>
 
-                  {/* Proctoring Timeline Log Feed */}
-                  <div style={{ backgroundColor: '#ffffff', borderRadius: '12px', border: '1px solid #E2E8F0', padding: '20px', marginBottom: '20px' }}>
-                    <h3 style={{ margin: '0 0 16px 0', fontSize: '1rem', fontWeight: 800, color: '#111827', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <FaHistory style={{ color: '#2b7cff' }} /> Anomaly Timeline & Log Feed
-                    </h3>
-                    {displayedSelectedAttemptLogs.length === 0 ? (
-                      <p style={{ margin: 0, fontSize: '0.85rem', color: '#6B7280', textAlign: 'center', padding: '12px 0' }}>No anomaly events logged for this session.</p>
-                    ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '220px', overflowY: 'auto', paddingRight: '8px' }}>
-                        {displayedSelectedAttemptLogs.map((log, i) => {
-                          const logTime = new Date(log.timestamp || log.created_at).toLocaleTimeString();
-                          const isAnomaly = log.isFlag || ['TAB_SWITCH', 'FACE_NOT_FOUND', 'MULTIPLE_FACES', 'COCO_SSD_OBJECT'].includes(log.type);
-                          const tagColor = isAnomaly ? '#DC2626' : '#059669';
-                          const bgColor = isAnomaly ? '#FEF2F2' : '#F0FDF4';
-
-                          return (
-                            <div key={i} style={{ display: 'flex', gap: '12px', alignItems: 'flex-start', padding: '10px 12px', borderRadius: '8px', backgroundColor: bgColor, borderLeft: `4px solid ${tagColor}` }}>
-                              <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#6B7280', whiteSpace: 'nowrap' }}>{logTime}</span>
-                              <div style={{ flex: 1 }}>
-                                <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#1F2937', display: 'block' }}>{String(log.type || '').replace(/_/g, ' ')}</span>
-                                <span style={{ fontSize: '0.75rem', color: '#4B5563' }}>{log.message || 'Status verified secure'}</span>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
+                  {/* Chronological Proctoring & Session Timeline */}
+                  <StudentSessionTimeline 
+                    attempt={selectedAttempt} 
+                    logs={displayedSelectedAttemptLogs.filter(l => !l.isFlag)} 
+                    flags={displayedSelectedAttemptLogs.filter(l => l.isFlag)} 
+                  />
 
                   {/* AI insight box */}
                   <div className="ai-proctor-insight-card">

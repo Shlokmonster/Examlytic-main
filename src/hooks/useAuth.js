@@ -1,29 +1,12 @@
- import supabase from "../SupabaseClient";
- import { useEffect } from "react";
- import { useState } from "react";
+import { useContext } from 'react';
+import { AuthContext } from '../context/AuthContext';
 
-export function useAuth() {
-    const [user, setUser] = useState(null)
-    const [loading, setLoading] = useState(true)
-    useEffect(()=>{
-        const getUser = async () => {
-            const { data } = await supabase.auth.getUser()
-            setUser(data?.user)
-            setLoading(false)
-    }
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+  if (!context) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
+};
 
-    getUser()
-
-    const { data: listener } = supabase.auth.onAuthStateChange((_, session) => {
-      setUser(session?.user || null)
-    })
-
-    return () => {
-      listener.subscription.unsubscribe()
-    }
-  }, [])
-
-  return { user, loading }
-
-}
-
+export default useAuth;

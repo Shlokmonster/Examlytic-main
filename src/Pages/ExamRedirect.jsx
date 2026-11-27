@@ -15,11 +15,11 @@ export default function ExamRedirect() {
 
   useEffect(() => {
     if (id && isValidUUID(id)) {
-      // Redirect to the exam intro page if we have a valid UUID
-      navigate(`/exam/intro/${id}`, { replace: true });
+      // Redirect to the exam page if we have a valid UUID
+      navigate(`/exam/${id}`, { replace: true });
     } else {
-      // Redirect to intro page if the ID is invalid or missing
-      navigate('/exam/intro', { 
+      // Redirect to examcode page if the ID is invalid or missing
+      navigate('/examcode', { 
         replace: true,
         state: { 
           error: 'Invalid exam link',
