@@ -1,0 +1,4 @@
+/* Admin v2 theme entry. Import this only from admin-v2 code. */
+@import './tokens.css';
+@import './typography.css';
+@import './grid.css';

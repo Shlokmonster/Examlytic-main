@@ -1,0 +1,257 @@
+/* ---- Shell: white page, 252px sidebar, gray rounded content panel ---- */
+.admin-v2.v2-shell {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  background: var(--color-white);
+  overflow: hidden;
+}
+
+.admin-v2 .v2-main {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: var(--space-3) var(--space-3) var(--space-3) 0;
+}
+
+.admin-v2 .v2-panel {
+  min-height: 100%;
+  background: var(--bg-app);
+  border-radius: var(--radius-xl);
+  padding: var(--space-4);
+}
+
+/* ---- Sidebar ---- */
+.admin-v2 .v2-sidebar {
+  flex: none;
+  width: var(--sidebar-w);
+  height: 100%;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-6) var(--space-6) var(--space-4);
+  background: var(--color-white);
+}
+
+.admin-v2 .v2-sidebar__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.admin-v2 .v2-sidebar__close { display: none; }
+
+.admin-v2 .v2-sidebar__search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  height: 38px;
+  margin-top: var(--space-6);
+  padding: 0 var(--space-2) 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-muted);
+  color: var(--text-secondary);
+  font-size: var(--fs-body-3);
+  font-weight: var(--fw-regular);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+.admin-v2 .v2-sidebar__search:hover { border-color: var(--border-strong); background: var(--bg-surface); }
+.admin-v2 .v2-sidebar__search:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.admin-v2 .v2-sidebar__search svg { width: 16px; height: 16px; }
+.admin-v2 .v2-sidebar__search span { flex: 1; text-align: left; }
+
+.admin-v2 .v2-sidebar__nav {
+  margin-top: var(--space-6);
+  flex: 1;
+}
+
+.admin-v2 .v2-sidebar__section + .v2-sidebar__section {
+  margin-top: var(--space-8);
+}
+
+.admin-v2 .v2-sidebar__heading {
+  margin: 0 0 var(--space-3);
+  font-size: var(--fs-body-1);
+  font-weight: var(--fw-semibold);
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  color: var(--color-black);
+}
+
+.admin-v2 .v2-sidebar__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.admin-v2 .v2-nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  height: 40px;
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-black);
+  font-size: var(--fs-body-2);
+  font-weight: var(--fw-regular);
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.admin-v2 .v2-nav-item svg {
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+
+.admin-v2 .v2-nav-item:hover { background: var(--bg-muted); }
+
+.admin-v2 .v2-nav-item.is-active {
+  background: var(--color-primary);
+  color: var(--text-on-primary);
+}
+
+.admin-v2 .v2-nav-item:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* ---- Nav count badge (Review Queue) ---- */
+.admin-v2 .v2-nav-item__badge {
+  margin-left: auto;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-danger);
+  color: var(--color-white);
+  font-size: 11px;
+  font-weight: var(--fw-semibold);
+  line-height: 20px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.admin-v2 .v2-nav-item.is-active .v2-nav-item__badge { background: var(--color-white); color: var(--color-primary); }
+
+/* ---- User card ---- */
+.admin-v2 .v2-user-card {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  margin-top: var(--space-8);
+  padding: var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--bg-muted);
+  text-align: left;
+  cursor: pointer;
+}
+
+.admin-v2 .v2-user-card__avatar {
+  width: 46px;
+  height: 46px;
+  flex: none;
+  border-radius: var(--radius-full);
+  object-fit: cover;
+}
+
+.admin-v2 .v2-user-card__avatar--initials {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-primary);
+  color: var(--text-on-primary);
+  font-size: var(--fs-body-1);
+  font-weight: var(--fw-semibold);
+}
+
+.admin-v2 .v2-user-card__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.admin-v2 .v2-user-card__name {
+  font-size: var(--fs-body-2);
+  font-weight: var(--fw-semibold);
+  color: var(--color-black);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-v2 .v2-user-card__email {
+  font-size: var(--fs-body-3);
+  font-weight: var(--fw-regular);
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-v2 .v2-user-card__chevron {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--color-black);
+}
+
+/* ---- Mobile bar + off-canvas sidebar (below 1024px) ---- */
+.admin-v2 .v2-mobilebar { display: none; }
+.admin-v2 .v2-scrim { display: none; }
+
+@media (max-width: 1023px) {
+  .admin-v2 .v2-main { padding: 0 var(--space-3) var(--space-3); }
+
+  .admin-v2 .v2-mobilebar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-3) var(--space-1);
+  }
+
+  .admin-v2 .v2-sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 20;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    box-shadow: none;
+  }
+
+  .admin-v2 .v2-sidebar.is-open {
+    transform: translateX(0);
+    box-shadow: 0 0 0 100vmax var(--color-black-overlay);
+  }
+
+  .admin-v2 .v2-sidebar__close { display: inline-flex; }
+
+  .admin-v2 .v2-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 19;
+  }
+}
+
+@media (max-width: 640px) {
+  .admin-v2 .v2-main { padding: 0 var(--space-2) var(--space-2); }
+  .admin-v2 .v2-panel { padding: var(--space-3); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-v2 .v2-sidebar { transition: none; }
+}

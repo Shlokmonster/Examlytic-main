@@ -1,0 +1,47 @@
+/* Admin v2 type styles: the 6 confirmed styles, nothing else. */
+.admin-v2 .h1 {
+  font-size: var(--fs-h1);
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-tight);
+  letter-spacing: var(--ls-heading);
+  margin: 0;
+}
+
+.admin-v2 .h2 {
+  font-size: var(--fs-h2);
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-tight);
+  letter-spacing: var(--ls-heading);
+  margin: 0;
+}
+
+.admin-v2 .h3 {
+  font-size: var(--fs-h3);
+  font-weight: var(--fw-semibold);
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.admin-v2 .body-1 {
+  font-size: var(--fs-body-1);
+  font-weight: var(--fw-regular);
+  line-height: var(--lh-normal);
+}
+
+.admin-v2 .body-2 {
+  font-size: var(--fs-body-2);
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-normal);
+}
+
+.admin-v2 .body-3 {
+  font-size: var(--fs-body-3);
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-normal);
+}
+
+/* Color helpers */
+.admin-v2 .text-heading { color: var(--text-heading); }
+.admin-v2 .text-secondary { color: var(--text-secondary); }
+.admin-v2 .text-placeholder { color: var(--text-placeholder); }

@@ -1,0 +1,179 @@
+/* ================= Students page layout ================= */
+.admin-v2 .v2-students-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.admin-v2 .v2-students-page .v2-card { padding: var(--space-6); }
+.admin-v2 .v2-students-page .v2-stat { padding: var(--space-4) var(--space-5) var(--space-5); }
+.admin-v2 .v2-students-page .v2-page-header { padding: var(--space-5) var(--space-6); }
+.admin-v2 .v2-students-page .v2-page-header .v2-btn svg { width: 18px; height: 18px; }
+
+/* Same proportions as the Exams page: main 72% / side 28% */
+.admin-v2 .v2-students-page__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2.55fr) minmax(300px, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.admin-v2 .v2-students-page__side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+/* ================= Students table card ================= */
+.admin-v2 .v2-students { min-width: 0; }
+
+.admin-v2 .v2-students__filters {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.admin-v2 .v2-students__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-top: var(--space-5);
+}
+
+.admin-v2 .v2-students__wrap { margin-top: var(--space-4); }
+/* Let row menus overflow the card on wide screens; scroll the table on narrow ones. */
+@media (min-width: 1280px) {
+  .admin-v2 .v2-students__wrap { overflow: visible; }
+}
+
+/* ================= Integrity overview ================= */
+.admin-v2 .v2-integrity__body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-5);
+  margin-top: var(--space-5);
+  flex-wrap: wrap;
+}
+
+.admin-v2 .v2-integrity__ring { position: relative; flex: none; }
+
+.admin-v2 .v2-integrity__center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.admin-v2 .v2-integrity__center-num {
+  font-size: var(--fs-h2);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--ls-heading);
+  line-height: 1.1;
+}
+.admin-v2 .v2-integrity__center-label {
+  font-size: var(--fs-body-3);
+  font-weight: var(--fw-regular);
+  color: var(--text-secondary);
+}
+
+.admin-v2 .v2-integrity__legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  flex: 1;
+  min-width: 110px;
+}
+
+.admin-v2 .v2-integrity__legend li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: var(--space-3);
+  border-left: 4px solid var(--band-color);
+}
+
+.admin-v2 .v2-integrity__legend-label {
+  font-size: var(--fs-body-2);
+  font-weight: var(--fw-medium);
+}
+
+.admin-v2 .v2-integrity__legend-stats {
+  font-size: var(--fs-body-3);
+  font-weight: var(--fw-regular);
+  color: var(--text-secondary);
+}
+.admin-v2 .v2-integrity__legend-stats strong {
+  color: var(--color-black);
+  font-weight: var(--fw-semibold);
+}
+
+/* ================= Top performers ================= */
+.admin-v2 .v2-performers__list {
+  list-style: none;
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.admin-v2 .v2-performers__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2);
+  margin: 0 calc(var(--space-2) * -1);
+  border-radius: var(--radius-md);
+  color: inherit;
+  text-decoration: none;
+  transition: background-color 0.15s ease;
+}
+.admin-v2 .v2-performers__item:hover { background: var(--bg-muted); }
+.admin-v2 .v2-performers__item:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 0; }
+
+.admin-v2 .v2-performers__rank {
+  width: 22px;
+  flex: none;
+  font-size: var(--fs-body-3);
+  font-weight: var(--fw-semibold);
+  color: var(--text-secondary);
+  text-align: center;
+}
+.admin-v2 .v2-performers__rank.is-first { color: var(--color-primary); }
+
+.admin-v2 .v2-performers__score {
+  margin-left: auto;
+  font-size: var(--fs-body-2);
+  font-weight: var(--fw-semibold);
+  color: var(--color-primary);
+}
+
+/* ================= Responsive ================= */
+@media (min-width: 1600px) {
+  .admin-v2 .v2-students-page,
+  .admin-v2 .v2-students-page__grid,
+  .admin-v2 .v2-students-page__side,
+  .admin-v2 .v2-students-page .v2-stats { gap: var(--space-5); }
+}
+
+@media (max-width: 1279px) {
+  .admin-v2 .v2-students-page__grid { grid-template-columns: minmax(0, 1fr); }
+  .admin-v2 .v2-students-page__side {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-v2 .v2-violations__fill,
+  .admin-v2 .v2-performers__item { transition: none; }
+}

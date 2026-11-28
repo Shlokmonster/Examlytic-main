@@ -1,0 +1,108 @@
+/*
+ * Admin v2 design tokens.
+ * Source: the confirmed reference sheets (typography, colors, grid system).
+ * RULE: these 12 colors are the only colors allowed in admin-v2.
+ * Tints and hover states use opacity of these colors, never new hex values.
+ * Everything is scoped to .admin-v2 so the old app's styles are untouched.
+ */
+.admin-v2 {
+  /* ---- Palette (the only 12 colors) ---- */
+  --color-primary: #174E4F;
+  --color-white: #FFFFFF;
+  --color-gray-50: #F3F4F6;
+  --color-gray-100: #E5E7EB;
+  --color-gray-200: #D1D5DC;
+  --color-gray-400: #99A1AF;
+  --color-gray-500: #6A7282;
+  --color-black: #000000;
+  --color-success: #00A63E;
+  --color-warning: #FCC800;
+  --color-danger: #E7000B;
+
+  /* Tints from the same colors with opacity (no new hex values) */
+  --color-primary-10: rgb(23 78 79 / 0.10);
+  --color-primary-20: rgb(23 78 79 / 0.20);
+  --color-primary-hover: rgb(23 78 79 / 0.90);
+  --color-success-10: rgb(0 166 62 / 0.10);
+  --color-warning-15: rgb(252 200 0 / 0.15);
+  --color-danger-10: rgb(231 0 11 / 0.10);
+  --color-black-overlay: rgb(0 0 0 / 0.40);
+
+  /* ---- Semantic aliases ---- */
+  --bg-app: var(--color-gray-50);
+  --bg-surface: var(--color-white);
+  --bg-muted: var(--color-gray-50);
+  --border: var(--color-gray-100);
+  --border-strong: var(--color-gray-200);
+  --text: var(--color-black);
+  --text-heading: var(--color-primary);
+  --text-secondary: var(--color-gray-500);
+  --text-placeholder: var(--color-gray-400);
+  --text-on-primary: var(--color-white);
+
+  /* ---- Typography ---- */
+  --font-sans: 'Inter Tight', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+
+  --fs-h1: 32px;
+  --fs-h2: 24px;
+  --fs-h3: 17px;
+  --fs-body-1: 16px;
+  --fs-body-2: 14px;
+  --fs-body-3: 12px;
+
+  --lh-tight: 1.2;
+  --lh-normal: 1.5;
+  --ls-heading: -0.02em;
+
+  /* ---- Spacing (4/8 scale) ---- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* ---- Radius ---- */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  /* ---- Grid system (1440px design width) ---- */
+  --layout-max: 1440px;
+  --sidebar-w: 252px;
+  --grid-cols: 12;
+  --grid-col-w: 75px;
+  --gutter: 24px;
+
+  /* ---- Base ---- */
+  font-family: var(--font-sans);
+  font-size: var(--fs-body-1);
+  font-weight: var(--fw-regular);
+  line-height: var(--lh-normal);
+  color: var(--text);
+  background: var(--bg-app);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.admin-v2 *,
+.admin-v2 *::before,
+.admin-v2 *::after {
+  box-sizing: border-box;
+}
+
+.admin-v2 button,
+.admin-v2 input,
+.admin-v2 select,
+.admin-v2 textarea {
+  font-family: inherit;
+}

@@ -16,6 +16,7 @@ import LiveMonitoring from "./Components/LiveMonitoring";
 import { ExamActivityProvider } from "./context/ExamActivityProvider";
 import Diagnostics from "./Pages/Diagnostics";
 import Loader from "./Components/common/Loader";
+import AdminV2Routes from "./admin-v2/AdminV2Routes";
 
 /**
  * Route protection wrapper:
@@ -134,6 +135,15 @@ function App() {
         element={
           <ProtectedRoute requiredRole="admin">
             <LiveMonitoring />
+          </ProtectedRoute>
+        }
+      />
+      {/* Admin v2 (UI revamp, mock data) */}
+      <Route
+        path="/v2/admin/*"
+        element={
+          <ProtectedRoute requiredRole="admin">
+            <AdminV2Routes />
           </ProtectedRoute>
         }
       />
